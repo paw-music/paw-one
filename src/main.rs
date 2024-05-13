@@ -26,9 +26,10 @@ use embedded_graphics::{
     geometry::{Dimensions, Point, Size},
     image::Image,
     mono_font::{ascii, MonoTextStyleBuilder},
-    pixelcolor::BinaryColor,
+    pixelcolor::{BinaryColor, PixelColor, Rgb555},
     primitives::{PrimitiveStyleBuilder, Rectangle, StyledDrawable},
     text::Text,
+    Drawable,
 };
 use embedded_layout::{layout::linear::LinearLayout, object_chain::Chain};
 use embedded_text::TextBox;
@@ -284,10 +285,16 @@ async fn main(spawner: Spawner) {
     //     true,
     // );
 
-    let btn1 = component!(Button {} @schema {color: BinaryColor});
-    let btn2 = component!(Button {} @schema {color: BinaryColor});
+    // let btn1 = component!(Button {});
+    // let btn2 = component!(Button {});
 
-    LinearLayout::horizontal(Chain::new(btn1).append(btn2));
+    // LinearLayout::horizontal(Chain::new(btn1).append(btn2)).drs;
+
+    declare_component! {
+        pub Comp extends {button: Button} {
+
+        }
+    }
 
     page.draw(&mut display).unwrap();
     display.flush().unwrap();

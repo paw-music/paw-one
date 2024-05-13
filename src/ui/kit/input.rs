@@ -1,4 +1,4 @@
-use crate::ui::Focus;
+use crate::ui::focus::Focus;
 
 pub trait InputEl: Focus {
     type Value;

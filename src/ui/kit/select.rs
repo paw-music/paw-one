@@ -13,12 +13,13 @@ use embedded_text::{style::TextBoxStyleBuilder, TextBox};
 use crate::{
     control::enc::EditByEncoder,
     ui::{
+        focus::Focus,
         mono_icons::{
             font_icons,
             icons_5x7::{self, MonoIcons5x7},
             MonoIcons,
         },
-        Focus, Invertible,
+        Invertible,
     },
 };
 

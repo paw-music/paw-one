@@ -1,4 +1,4 @@
-use embedded_graphics::{pixelcolor::BinaryColor, Drawable};
+use embedded_graphics::Drawable;
 use embedded_layout::layout::linear::LinearLayout;
 
 use crate::{
@@ -6,7 +6,10 @@ use crate::{
     synth::{self, event::SynthEvent},
 };
 
-use super::pages::{osc::OscPage, preset::PresetPage};
+use super::{
+    builder::{Component, DefaultColor},
+    pages::preset::PresetPage,
+};
 
 pub enum PageEvent {
     None,
@@ -28,11 +31,11 @@ macro_rules! declare_pages {
             $($name),*
         }
 
-        pub enum Pages<'a> {
-            $($name($ty<'a>)),*
+        pub enum Pages<'a, C: $crate::ui::builder::DefaultColor> {
+            $($name($ty<'a, C>)),*
         }
 
-        impl<'a> Page for Pages<'a> {
+        impl<'a, C: $crate::ui::builder::DefaultColor> Page for Pages<'a, C> {
             fn input(&mut self, control_panel: crate::control::ControlsStateChanged) -> Result<PageEvent, PageError> {
                 match self {
                     $(Self::$name(page) => page.input(control_panel)),*
@@ -40,8 +43,8 @@ macro_rules! declare_pages {
             }
         }
 
-        impl<'a> Drawable for Pages<'a> {
-            type Color = BinaryColor;
+        impl<'a, C: $crate::ui::builder::DefaultColor> Drawable for Pages<'a, C> {
+            type Color = C;
             type Output = ();
 
             fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -57,16 +60,15 @@ macro_rules! declare_pages {
 
 declare_pages! {
     Preset: PresetPage,
-    Osc: OscPage,
+    // Osc: OscPage,
 }
 
 pub struct PageFactory;
 
 impl PageFactory {
-    pub fn page(&self, id: PageId) -> Pages {
+    pub fn page<C: DefaultColor>(&self, id: PageId) -> Pages<C> {
         match id {
             PageId::Preset => Pages::Preset(PresetPage::new()),
-            PageId::Osc => Pages::Osc(OscPage::new()),
         }
     }
 }
@@ -77,74 +79,40 @@ macro_rules! make_page {
         $($field: ident: $field_ty: ty = $field_val: expr,)*
 
         @draw
-        $($el: ident: $el_ty: ident {$($props: tt)*})*
+        $($el: ident: $el_ty: ident $($child_props: tt)?)*
     } $(focus $default_focus: ident,)?
     @schema {
         color: $color_ty: ty
     }
     ) => {
         mod focus {
-            #[allow(non_camel_case_types)]
-            #[derive(Clone, Copy)]
-            pub enum Focus {
-                $($el),*
-            }
-
-            const FOCUSES: &[Focus] = &[$(Focus::$el),*];
-
-            $(
-                impl Default for Focus {
-                    fn default() -> Self {
-                        Self::$default_focus
-                    }
-                }
-            )?
-
-            impl TryFrom<i32> for Focus {
-                type Error = ();
-
-                fn try_from(value: i32) -> Result<Self, Self::Error> {
-                    if value > 0 && value < FOCUSES.len() as i32 {
-                        Err(())
-                    } else {
-                        Ok(FOCUSES[value as usize])
-                    }
-                }
-            }
-
-            impl core::ops::Add<i32> for Focus {
-                type Output = Self;
-
-                fn add(self, rhs: i32) -> Self::Output {
-                    let size = FOCUSES.len() as i32;
-                    let i = self as i32 + rhs;
-                    ((size + i % size) % size).try_into().unwrap()
-                }
+            $crate::ui::focus::declare_focus! {
+                $($el),* $(default $default_focus)?
             }
         }
 
-        $vis struct $name <'a> {
+        $vis struct $name <'a, C: $crate::ui::builder::DefaultColor> {
             /// What is focused on the page?
             focus: focus::Focus,
             /// Is page focused?
             focused: bool,
             $($field: $field_ty),*
-            $($el: $el_ty<'a>),*
+            $($el: $el_ty<'a, C>),*
         }
 
-        impl<'a> $name<'a> {
+        impl<'a, C: $crate::ui::builder::DefaultColor> $name<'a, C> {
             pub fn new() -> Self {
                 Self {
                     focus: focus::Focus::default(),
                     focused: false,
                     $($field: $field_val),*
-                    $($el: crate::ui::builder::component!($el_ty {$($props)*} @schema {color: $color_ty})),*
+                    $($el: crate::ui::builder::component!($el_ty $($child_props)?)),*
                 }
             }
         }
 
-        impl<'a> Drawable for $name<'a> {
-            type Color = BinaryColor;
+        impl<'a, C: $crate::ui::builder::DefaultColor> Drawable for $name<'a, C> {
+            type Color = C;
             type Output = ();
 
             fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>

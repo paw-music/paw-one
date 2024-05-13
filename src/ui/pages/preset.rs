@@ -1,7 +1,7 @@
 use embedded_graphics::{
     geometry::{Point, Size},
     mono_font::{MonoTextStyle, MonoTextStyleBuilder},
-    pixelcolor::BinaryColor,
+    pixelcolor::{BinaryColor, PixelColor},
     prelude::Drawable,
     primitives::{
         Primitive, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle,
@@ -13,11 +13,10 @@ use embedded_text::TextBox;
 use crate::{
     control::{enc::EncoderState, ControlsStateChanged},
     ui::{
-        builder::component,
+        builder::{component, DefaultColor},
         kit::button::Button,
         page::{make_page, Page, PageError, PageEvent},
         text::FONT_SMALL,
-        Focus,
     },
 };
 
@@ -38,6 +37,8 @@ make_page! {
             font: &FONT_SMALL;
             width: 22;
             height: 11;
+            top: 12;
+            border_radius: 3;
         }
     }
     focus edit_btn,
@@ -46,7 +47,7 @@ make_page! {
     }
 }
 
-impl<'a> Page for PresetPage<'a> {
+impl<'a, C: DefaultColor> Page for PresetPage<'a, C> {
     fn input(&mut self, control_panel: ControlsStateChanged) -> Result<PageEvent, PageError> {
         if let EncoderState::Changed(main_enc) = control_panel.main_enc {
             self.focus = self.focus + main_enc;

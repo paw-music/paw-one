@@ -1,8 +1,10 @@
+use super::text::FONT_SMALL;
 use embedded_graphics::{
     geometry::{AnchorPoint, Point, Size},
     mono_font::{MonoFont, MonoTextStyle, MonoTextStyleBuilder},
     pixelcolor::{BinaryColor, GrayColor, PixelColor},
     primitives::{CornerRadii, PrimitiveStyleBuilder, Rectangle, RoundedRectangle, StyledDrawable},
+    text::renderer::TextRenderer,
     transform::Transform,
     Drawable,
 };
@@ -38,7 +40,42 @@ use embedded_graphics::{
 //     }
 // }
 
-pub trait DefaultColor: PixelColor {
+pub trait Component: Sized {}
+
+impl<'a, S: TextRenderer> Component for TextBox<'a, S> {}
+
+#[derive(Clone, Copy)]
+pub enum HorizontalAlign {
+    Left,
+    Middle,
+    Right,
+}
+
+#[derive(Clone, Copy)]
+pub enum VerticalAlign {
+    Top,
+    Middle,
+    Bottom,
+}
+
+pub enum LinearDirection {
+    Horizontal,
+    Vertical,
+}
+
+pub trait Layout {
+    fn horizontal_align(&self) -> HorizontalAlign;
+    fn vertical_align(&self) -> VerticalAlign;
+    fn linear_direction(&self) -> LinearDirection;
+}
+
+pub struct LayoutComponent {
+    pub horizontal_align: HorizontalAlign,
+    pub vertical_align: VerticalAlign,
+    pub linear_direction: LinearDirection,
+}
+
+pub trait DefaultColor: PixelColor + Default {
     fn default_background() -> Self;
     fn default_foreground() -> Self;
 }
@@ -53,12 +90,27 @@ impl DefaultColor for BinaryColor {
     }
 }
 
+impl<'a, C: PixelColor> From<&ComponentProps<'a, C>> for TextBox<'a, MonoTextStyle<'a, C>> {
+    fn from(props: &ComponentProps<'a, C>) -> Self {
+        props.text.clone()
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct BlockComponent<C: PixelColor> {
     pub bounds: Rectangle,
     pub border_radius: CornerRadii,
     pub border_width: u32,
     pub border_color: C,
     pub background_color: C,
+}
+
+impl<C: PixelColor> Component for BlockComponent<C> {}
+
+impl<'a, C: PixelColor> From<&ComponentProps<'a, C>> for BlockComponent<C> {
+    fn from(props: &ComponentProps<'a, C>) -> Self {
+        props.block
+    }
 }
 
 impl<C: PixelColor> Drawable for BlockComponent<C> {
@@ -102,11 +154,22 @@ impl<C: PixelColor> Drawable for BlockComponent<C> {
 //     }
 // }
 
+pub trait ComponentChildren: Default {}
+
+pub trait ParentComponent {
+    type Children: ComponentChildren;
+}
+
+pub struct ComponentInit<'a, C: PixelColor, Ch: ComponentChildren> {
+    pub props: ComponentProps<'a, C>,
+    pub children: Ch,
+}
+
 // TODO: Compile-time required fields check
 pub struct ComponentProps<'a, C: PixelColor> {
     pub block: BlockComponent<C>,
-    // pub text: TextComponent<C>,
     pub text: TextBox<'a, MonoTextStyle<'a, C>>,
+    pub layout: LayoutComponent,
 }
 
 // impl<C: PixelColor> ComponentProps<C> {
@@ -179,64 +242,14 @@ impl<'a, C: DefaultColor> Default for ComponentProps<'a, C> {
                 border_color: C::default_foreground(),
                 background_color: C::default_background(),
             },
+            layout: LayoutComponent {
+                horizontal_align: HorizontalAlign::Left,
+                vertical_align: VerticalAlign::Top,
+                linear_direction: LinearDirection::Horizontal,
+            },
         }
     }
 }
-
-// pub trait BoundsBuilder {
-//     fn bounds_mut(&mut self) -> &mut Rectangle;
-// }
-
-// pub trait TextStyleBuilder {
-//     fn mono_text_style_mut(&mut self) -> &mut MonoTextStyle<'static, BinaryColor>;
-// }
-
-// pub trait Component {
-//     type Builder: ComponentBuilder;
-// }
-
-// macro_rules! component {
-//     // Bounds
-//     (@prop $builder: ident width: $width: expr) => {{
-//         $builder.bounds_mut().size.width = $width;
-//         $builder
-//     }};
-
-//     (@prop $builder: ident height: $height: expr) => {{
-//         $builder.bounds_mut().size.height = $height;
-//         $builder
-//     }};
-
-//     (@prop $builder: ident top: $top: expr) => {{
-//         $builder.bounds_mut().top_left.y = $top;
-//         $builder
-//     }};
-
-//     (@prop $builder: ident left: $left: expr) => {{
-//         $builder.bounds_mut().top_left.x = $left;
-//         $builder
-//     }};
-
-//     // Text style / Char style
-//     (@prop $builder: ident font: $font: expr) => {{
-//         $builder.mono_text_style_mut().font = $font;
-//     }};
-
-//     // Non-special synth
-//     (@prop $builder: ident $prop: ident: $($prop_val: expr)+) => {
-//         crate::ui::ComponentBuilder::$prop($builder, $($prop_val),+)
-//     };
-
-//     ($comp: ty {
-//         $($prop: ident: $($prop_val: expr)+),+ $(,)?
-//     }) => {{
-//         let mut builder = <$comp as crate::ui::builder::Component>::Builder::new();
-//         $(let mut builder = component!(@prop builder $prop: $($prop_val)+);)+
-//         builder.build()
-//     }};
-// }
-
-// pub(crate) use component;
 
 #[macro_export]
 macro_rules! component {
@@ -249,8 +262,20 @@ macro_rules! component {
         From::from($color)
     };
 
-    // Block //
+    // Layout
+    (@prop $props: ident vertical_align: $vertical_align: expr) => {
+        $props.parent.vertical_align = $vertical_align;
+    };
 
+    (@prop $props: ident horizontal_align: $horizontal_align: expr) => {
+        $props.parent.horizontal_align = $horizontal_align;
+    };
+
+    (@prop $props: ident linear_direction: $linear_direction: expr) => {
+        $props.parent.linear_direction = $linear_direction;
+    };
+
+    // Block //
     (@prop $props: ident background_color: $background_color: expr) => {
         $props.block.background_color = $background_color;
     };
@@ -265,11 +290,11 @@ macro_rules! component {
     };
 
     (@prop $props: ident top: $top: expr) => {
-        $props.bounds.top_left.y = $top;
+        $props.block.bounds.top_left.y = $top;
     };
 
     (@prop $props: ident left: $left: expr) => {
-        $props.bounds.top_left.x = $left;
+        $props.block.bounds.top_left.x = $left;
     };
 
     // Border
@@ -309,21 +334,163 @@ macro_rules! component {
         $props.text.character_style.text_style = component!(@help color $text_color);
     };
 
-    ($comp: ty {
+    ($comp: ident {
         $($prop: ident: $($prop_val: expr),+;)*
-    } @schema {
-        color: $color_ty: ty
     }) => {{
-        let mut props = $crate::ui::builder::ComponentProps::<$color_ty>::default();
+        let mut props = $crate::ui::builder::ComponentProps::default();
         $(component!(@prop props $prop: $($prop_val),+);)*
-        <$comp as From<$crate::ui::builder::ComponentProps<$color_ty>>>::from(props.refined())
+        <$comp<_> as From<&$crate::ui::builder::ComponentProps::<_>>>::from(&props.refined())
     }};
 }
 
 pub(crate) use component;
+
+// #[derive(Clone, Copy)]
+// pub enum LinearContainerDirection {
+//     Horizontal,
+//     Vertical,
+// }
+
+// #[macro_export]
+// macro_rules! linear_container {
+//     (@prop_ty direction: $direction: ident) => {
+//         $crate::ui::builder::LinearContainerDirection
+//     };
+
+//     (@prop_ty children: {
+//         $($child: ident: $child_ty: ident $($child_comp_props: tt)?)*
+//     }) => {
+//         $($child: $child_ty),*
+//     };
+
+//     (@prop_val direction: horizontal) => {
+//         $crate::ui::builder::LinearContainerDirection::Horizontal
+//     };
+
+//     (@prop_val direction: vertical) => {
+//         $crate::ui::builder::LinearContainerDirection::Vertical
+//     };
+
+//     (@prop_val children: {
+//         $($child: ident: $child_ty: ident $($child_comp_props: tt)?)*
+//     }) => {
+//         $crate::ui::builder::component!($child_ty $($child_comp_props)?)
+//     };
+
+//     (@list_children $prop: ident: $($prop_val: tt),+) => {};
+
+//     (@list_children children: {
+//         $($child: ident: $child_ty: ident $($child_comp_props: tt)?)*
+//     }) => {
+//         $($child),*
+//     };
+
+//     (@list_children $($prop: ident: $($prop_val: expr),+)*) => {
+//         $(linear_container!(@list_children $prop)),*
+//     };
+
+//     ({
+//         $($prop: ident: $($prop_val: tt),+)*
+//     }) => {
+//         mod sealed {
+//             $crate::ui::focus::declare_focus!(linear_container!(@list_children $($prop: $($prop_val),+)*));
+
+//             struct LinearContainer<'a, C: $crate::ui::builder::DefaultColor> {
+//                 marker: core::marker::PhantomData<&'a C>,
+//                 block: $crate::ui::builder::BlockComponent<C>,
+//                 $($prop: linear_container!(@prop_ty $prop: $($prop_val),+)),*
+//             }
+
+//             impl<'a, C: $crate::ui::builder::DefaultColor> LinearContainer<'a, C> {
+//                 fn new() -> Self {
+//                     Self {
+//                         $($prop: linear_container!(@prop_val $prop: $($prop_val),+)),*
+//                     }
+//                 }
+//             }
+
+//             impl<'a, C: $crate::ui::builder::DefaultColor> embedded_graphics::Drawable for LinearContainer<'a, C> {
+//                 type Color = C;
+//                 type Output = ();
+
+//                 fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
+//                 where
+//                     D: embedded_graphics::prelude::DrawTarget<Color = Self::Color>,
+//                 {
+//                     todo!()
+//                 }
+//             }
+//         }
+//     };
+// }
+
 use embedded_text::{
     style::{TextBoxStyle, TextBoxStyleBuilder},
     TextBox,
 };
 
-use super::text::FONT_SMALL;
+#[macro_export]
+macro_rules! declare_component {
+    (@extends text) => {
+        embedded_text::TextBox<'a, MonoTextStyle<'a, C>>
+    };
+
+    (@extends block) => {
+        $crate::ui::builder::BlockComponent<C>
+    };
+
+    (@extends $another: ident) => {
+        $another<'a, C>
+    };
+
+    ($vis: vis $name: ident $(extends {$($extends: ident: $extends_ty: ident),+})? {
+        $($child: ident: $child_comp: ty),* $(,)?
+    }) => {
+        mod sealed {
+            #[derive(Default, Clone)]
+            pub struct Children {
+                $($child: $child_comp),*
+            }
+
+            impl $crate::ui::builder::ComponentChildren for Children {
+
+            }
+        }
+
+        $vis struct $name<'a, C: $crate::ui::builder::DefaultColor> {
+            marker: core::marker::PhantomData<&'a C>,
+            children: <Self as $crate::ui::builder::ParentComponent>::Children,
+            $($($extends: declare_component!(@extends $extends_ty)),+)?
+        }
+
+        impl<'a, C: $crate::ui::builder::DefaultColor> $crate::ui::builder::ParentComponent for $name<'a, C> {
+            type Children = sealed::Children;
+        }
+
+        impl<'a, C: $crate::ui::builder::DefaultColor> From<&$crate::ui::builder::ComponentProps<'a, C>> for $name<'a, C> {
+            fn from(props: &$crate::ui::builder::ComponentProps<'a, C>) -> Self {
+                Self {
+                    marker: Default::default(),
+                    children: props.children.clone(),
+                    $($($extends: From::from(props)),*)?
+                }
+            }
+        }
+
+        impl<'a, C: $crate::ui::builder::DefaultColor> Drawable for $name<'a, C> {
+            type Color = C;
+            type Output = ();
+
+            fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
+            where
+                D: embedded_graphics::prelude::DrawTarget<Color = Self::Color>,
+            {
+                $(self.$child.draw(target)?;)*
+
+                Ok(())
+            }
+        }
+    };
+}
+
+pub use declare_component;

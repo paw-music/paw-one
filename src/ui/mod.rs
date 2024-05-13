@@ -4,6 +4,7 @@ mod logo;
 pub mod mono_icons;
 pub mod page;
 pub mod pages;
+pub mod focus;
 
 use embedded_graphics::{
     image::ImageRaw,
@@ -36,18 +37,6 @@ pub const LOGO: ImageRaw<'static, BinaryColor> = ImageRaw::new(&logo::LOGO, 128)
 // pub trait Element {
 //     fn view(&self) ->
 // }
-
-pub trait Focus {
-    fn focused(&self) -> bool;
-    fn set_focus(&mut self, focus: bool);
-
-    fn focus(&mut self) {
-        self.set_focus(true)
-    }
-    fn blur(&mut self) {
-        self.set_focus(false)
-    }
-}
 
 pub trait ToHeaplessString {
     fn to_heapless_string<const SIZE: usize>(&self) -> heapless::String<SIZE>;
