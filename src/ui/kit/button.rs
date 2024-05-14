@@ -20,5 +20,8 @@ use crate::{
 use super::input::InputEl;
 
 declare_component! {
-    pub Button extends {block: block, text: text} {}
+    pub Button {
+        text: text,
+        block: block,
+    }
 }

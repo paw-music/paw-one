@@ -291,10 +291,13 @@ async fn main(spawner: Spawner) {
     // LinearLayout::horizontal(Chain::new(btn1).append(btn2)).drs;
 
     declare_component! {
-        pub Comp extends {button: Button} {
-
+        pub Comp {
+            lol: Button,
+            text: text,
         }
     }
+
+    let a = component!(Comp { lol: Button {}; });
 
     page.draw(&mut display).unwrap();
     display.flush().unwrap();
