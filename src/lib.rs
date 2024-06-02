@@ -4,8 +4,8 @@
 pub mod sound;
 pub mod ui;
 
-pub mod heap;
 pub mod control;
+pub mod heap;
 pub mod synth;
 
 #[macro_use]

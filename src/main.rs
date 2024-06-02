@@ -44,9 +44,7 @@ use paw_one::{
     heap::init_global_heap,
     sound::adsr::{ui::AdsrEdit, Adsr, AdsrCurveBend, AdsrStage, DurationSlope},
     ui::{
-        kit::{button::Button, input::InputEl as _, select::SelectView},
         mono_icons::{icons_5x7::MonoIcons5x7, MonoIcons},
-        page::{Page, PageFactory},
         text::{FONT_MEDIUM, FONT_SMALL},
         LOGO,
     },
@@ -271,8 +269,6 @@ async fn main(spawner: Spawner) {
     //     active: AdsrStage::Delay,
     // };
 
-    let mut page = PageFactory.page(paw_one::ui::page::PageId::Preset);
-
     // let mut select = SelectView::new(
     //     &["abc", "bcd", "cde", "def", "efg"],
     //     0,
@@ -290,16 +286,6 @@ async fn main(spawner: Spawner) {
 
     // LinearLayout::horizontal(Chain::new(btn1).append(btn2)).drs;
 
-    declare_component! {
-        pub Comp {
-            lol: Button,
-            text: text,
-        }
-    }
-
-    let a = component!(Comp { lol: Button {}; });
-
-    page.draw(&mut display).unwrap();
     display.flush().unwrap();
 
     info!("Starting main loop...");
@@ -315,9 +301,6 @@ async fn main(spawner: Spawner) {
 
         if let ControlsState::Changed(state) = CONTROL_PANEL_CHANNEL.receive().await {
             info!("Changed");
-
-            page.input(state).unwrap();
-            page.draw(&mut display).unwrap();
 
             // if let EncoderState::Changed(mut main_encoder_state) = main_enc {
             //     if main_encoder_state < 0 {

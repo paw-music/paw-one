@@ -12,16 +12,16 @@ use embedded_text::{
     TextBox,
 };
 
-use crate::{
-    declare_component,
-    ui::builder::{BlockComponent, ComponentProps},
-};
+use crate::ui::widget::Widget;
 
-use super::input::InputEl;
+pub struct Button {}
 
-declare_component! {
-    pub Button {
-        text: text,
-        block: block,
+impl<'a, Env> Widget<'a, Env> for Button {
+    fn update(
+        &mut self,
+        event: crate::ui::event::Event,
+        ctx: &mut crate::ui::UiCtx<'a, Env>,
+    ) -> crate::ui::event::EventResponse {
+        Ok(crate::ui::event::EventIgnored::Ignored)
     }
 }

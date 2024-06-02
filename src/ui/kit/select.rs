@@ -13,7 +13,6 @@ use embedded_text::{style::TextBoxStyleBuilder, TextBox};
 use crate::{
     control::enc::EditByEncoder,
     ui::{
-        focus::Focus,
         mono_icons::{
             font_icons,
             icons_5x7::{self, MonoIcons5x7},
@@ -22,8 +21,6 @@ use crate::{
         Invertible,
     },
 };
-
-use super::input::InputEl;
 
 pub trait SelectOption: core::fmt::Display {}
 
@@ -86,29 +83,29 @@ where
     }
 }
 
-impl<'a, O> Focus for SelectView<'a, O>
-where
-    O: SelectOption,
-{
-    fn focused(&self) -> bool {
-        self.focused
-    }
+// impl<'a, O> Focus for SelectView<'a, O>
+// where
+//     O: SelectOption,
+// {
+//     fn focused(&self) -> bool {
+//         self.focused
+//     }
 
-    fn set_focus(&mut self, focus: bool) {
-        self.focused = focus
-    }
-}
+//     fn set_focus(&mut self, focus: bool) {
+//         self.focused = focus
+//     }
+// }
 
-impl<'a, O> InputEl for SelectView<'a, O>
-where
-    O: SelectOption,
-{
-    type Value = O;
+// impl<'a, O> InputEl for SelectView<'a, O>
+// where
+//     O: SelectOption,
+// {
+//     type Value = O;
 
-    fn value(&self) -> &Self::Value {
-        &self.options[self.selected]
-    }
-}
+//     fn value(&self) -> &Self::Value {
+//         &self.options[self.selected]
+//     }
+// }
 
 impl<'a, O> EditByEncoder for SelectView<'a, O>
 where

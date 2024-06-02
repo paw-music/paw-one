@@ -1,7 +1,7 @@
-use crate::ui::focus::Focus;
+// use crate::ui::focus::Focus;
 
-pub trait InputEl: Focus {
-    type Value;
+// pub trait InputEl: Focus {
+//     type Value;
 
-    fn value(&self) -> &Self::Value;
-}
+//     fn value(&self) -> &Self::Value;
+// }
