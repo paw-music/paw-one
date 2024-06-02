@@ -42,12 +42,6 @@ use paw_one::{
         ControlPanel, ControlsState,
     },
     heap::init_global_heap,
-    sound::adsr::{ui::AdsrEdit, Adsr, AdsrCurveBend, AdsrStage, DurationSlope},
-    ui::{
-        mono_icons::{icons_5x7::MonoIcons5x7, MonoIcons},
-        text::{FONT_MEDIUM, FONT_SMALL},
-        LOGO,
-    },
 };
 use rotary_encoder_embedded::RotaryEncoder;
 use ssd1306::{mode::DisplayConfig as _, prelude::Brightness};
@@ -245,24 +239,6 @@ async fn main(spawner: Spawner) {
     //     paw::audio::osc::simple_form::WaveForm::Square,
     //     220.0,
     // );
-
-    let adsr = Adsr {
-        delay: Duration::from_secs(1).into(),
-        attack: DurationSlope {
-            duration: Duration::from_secs(1).into(),
-            bend: AdsrCurveBend::new(0.0),
-        },
-        hold: Duration::from_secs(1).into(),
-        decay: DurationSlope {
-            duration: Duration::from_secs(1).into(),
-            bend: AdsrCurveBend::new(0.0),
-        },
-        sustain: 1.0.into(),
-        release: DurationSlope {
-            duration: Duration::from_secs(1).into(),
-            bend: AdsrCurveBend::new(0.0),
-        },
-    };
 
     // let mut adsr_edit = AdsrEdit {
     //     adsr,

@@ -2,7 +2,6 @@
 #![no_main]
 
 pub mod sound;
-pub mod ui;
 
 pub mod control;
 pub mod heap;
