@@ -46,9 +46,9 @@ const SAMPLE_RATE: u32 = 48_000;
 // type ControlPanelChannel = embassy_sync::channel::Channel<ThreadModeRawMutex, ControlsState, 16>;
 // static CONTROL_PANEL_CHANNEL: ControlPanelChannel = embassy_sync::channel::Channel::new();
 
-const SOUND_BUFFER_SIZE: usize = 1000;
+const SOUND_BUFFER_SIZE: usize = 1024;
 type SoundBuffer = [u16; SOUND_BUFFER_SIZE];
-type SoundChannel = embassy_sync::channel::Channel<ThreadModeRawMutex, SoundBuffer, 8>;
+type SoundChannel = embassy_sync::channel::Channel<ThreadModeRawMutex, SoundBuffer, 4>;
 static SOUND_CHANNEL: SoundChannel = embassy_sync::channel::Channel::new();
 
 #[embassy_executor::task]
@@ -72,20 +72,22 @@ async fn control_panel(
 ) {
     loop {
         channel.send(control_panel.tick()).await;
-        Timer::after_millis(1).await;
+        // Timer::after_millis(1).await;
     }
 }
 
 #[embassy_executor::task]
 async fn playback(
-    channel: Receiver<'static, ThreadModeRawMutex, SoundBuffer, 8>,
+    channel: Receiver<'static, ThreadModeRawMutex, SoundBuffer, 4>,
     mut i2s: I2S<'static>,
 ) {
     loop {
         let buf = channel.receive().await;
         i2s.write(&buf).await.unwrap();
-        Timer::after_micros(10).await;
-        info!("Sent to i2s");
+
+        // info!("Sent to i2s");
+
+        // Timer::after_micros(10).await;
     }
 }
 
@@ -93,37 +95,9 @@ async fn playback(
 async fn main(spawner: Spawner) {
     info!("Program entered");
 
-    let mut config = embassy_stm32::Config::default();
+    let config = {
+        let mut config = embassy_stm32::Config::default();
 
-    // { stm32f411
-    //     use embassy_stm32::rcc::*;
-
-    //     config.rcc.sys = Sysclk::PLL1_P;
-    //     config.rcc.hse = Some(Hse {
-    //         freq: Hertz::mhz(25),
-    //         mode: HseMode::Oscillator,
-    //     });
-    //     config.rcc.pll_src = PllSource::HSE;
-    //     config.rcc.pll = Some(Pll {
-    //         // 16MHz HSI
-    //         prediv: PllPreDiv::DIV25,
-    //         mul: PllMul::MUL192,
-    //         divp: Some(PllPDiv::DIV2),
-    //         divq: Some(PllQDiv::DIV4),
-    //         divr: Some(PllRDiv::DIV2),
-    //     });
-    //     config.rcc.plli2s = Some(Pll {
-    //         prediv: PllPreDiv::DIV12,
-    //         mul: PllMul::MUL50,
-    //         divp: Some(PllPDiv::DIV2),
-    //         divq: Some(PllQDiv::DIV4),
-    //         divr: Some(PllRDiv::DIV2),
-    //     });
-    //     config.rcc.ahb_pre = AHBPrescaler::DIV1;
-    //     config.rcc.apb1_pre = APBPrescaler::DIV2; // Must give <=50MHz
-    // }
-
-    {
         // Stm32f412re
         use embassy_stm32::rcc::*;
 
@@ -135,21 +109,23 @@ async fn main(spawner: Spawner) {
         config.rcc.sys = Sysclk::PLL1_P;
         config.rcc.pll_src = PllSource::HSI;
         config.rcc.pll = Some(Pll {
-            prediv: PllPreDiv::DIV16,
+            prediv: PllPreDiv::DIV8,
             mul: PllMul::MUL192,
-            divp: Some(PllPDiv::DIV2),
+            divp: Some(PllPDiv::DIV4),
             divq: Some(PllQDiv::DIV2),
-            divr: Some(PllRDiv::DIV2),
+            divr: Some(PllRDiv::DIV4),
         });
         config.rcc.plli2s = Some(Pll {
-            prediv: PllPreDiv::DIV16,
-            mul: PllMul::MUL384,
-            divp: Some(PllPDiv::DIV2),
+            prediv: PllPreDiv::DIV8,
+            mul: PllMul::MUL192,
+            divp: Some(PllPDiv::DIV4),
             divq: Some(PllQDiv::DIV2),
-            divr: Some(PllRDiv::DIV2),
+            divr: Some(PllRDiv::DIV4),
         });
         config.rcc.apb1_pre = APBPrescaler::DIV2;
-    }
+
+        config
+    };
 
     let p = embassy_stm32::init(config);
 
@@ -180,7 +156,7 @@ async fn main(spawner: Spawner) {
 
         i2s_config.mode = i2s::Mode::Master;
         i2s_config.standard = i2s::Standard::Philips;
-        i2s_config.format = i2s::Format::Data16Channel16;
+        i2s_config.format = i2s::Format::Data16Channel32;
         i2s_config.clock_polarity = i2s::ClockPolarity::IdleLow;
         i2s_config.master_clock = true;
 
@@ -191,7 +167,7 @@ async fn main(spawner: Spawner) {
             p.PB3,
             p.PC7,
             p.DMA1_CH7,
-            Hertz::hz(SAMPLE_RATE * 32),
+            Hertz::hz(SAMPLE_RATE * 16 * 2),
             i2s_config,
         );
 
@@ -256,12 +232,12 @@ async fn main(spawner: Spawner) {
     let mut buf = [0u16; SOUND_BUFFER_SIZE];
 
     for s in buf.iter_mut() {
-        *s = (sound.next_sample() * i16::MAX as f32) as i16 as u16;
+        *s = (sound.next_sample() * 0.1 * i16::MAX as f32) as i16 as u16;
     }
 
     info!("Starting main loop...");
     loop {
         SOUND_CHANNEL.send(buf).await;
-        info!("Sent to playback");
+        // info!("Sent to playback");
     }
 }
