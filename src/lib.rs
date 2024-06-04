@@ -6,6 +6,7 @@ pub mod sound;
 pub mod control;
 pub mod heap;
 pub mod synth;
+pub mod ui;
 
 #[macro_use]
 extern crate alloc;

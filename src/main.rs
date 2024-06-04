@@ -10,45 +10,31 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::{
     bind_interrupts,
-    exti::ExtiInput,
-    gpio::{AnyPin, Input, Level, Output, Pin, Speed},
+    gpio::{Level, Output, Pin, Speed},
     i2c,
     i2s::{self, I2S},
-    peripherals::{self, SPI1},
-    spi::{self, MckPin},
+    peripherals,
+    spi::{CkPin, MckPin, MosiPin, WsPin},
     time::Hertz,
+    Peripheral,
 };
-use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, channel::Sender};
-use embassy_time::{Duration, Instant, Timer};
-use embassy_usb::class::cdc_acm::State;
+use embassy_sync::{
+    blocking_mutex::raw::ThreadModeRawMutex,
+    channel::{Receiver, Sender},
+};
+use embassy_time::Timer;
 use embedded_graphics::{
-    draw_target::DrawTarget,
-    geometry::{Dimensions, Point, Size},
-    image::Image,
-    mono_font::{ascii, MonoTextStyleBuilder},
-    pixelcolor::{BinaryColor, PixelColor, Rgb555},
-    primitives::{PrimitiveStyleBuilder, Rectangle, StyledDrawable},
-    text::Text,
-    Drawable,
+    draw_target::DrawTarget, geometry::Point, image::Image, pixelcolor::BinaryColor, Drawable,
 };
-use embedded_layout::{layout::linear::LinearLayout, object_chain::Chain};
-use embedded_text::TextBox;
 use paw::audio::{osc::simple_form::SimpleFormSource, source::AudioSourceIter};
 use paw_one::{
-    board_info::DISPLAY_SIZE,
-    control::{
-        self,
-        enc::{AccelEncoderState, EditByEncoder, EncoderState},
-        ControlPanel, ControlsState,
-    },
+    control::{ControlPanel, ControlsState},
     heap::init_global_heap,
+    ui::logo::LOGO,
 };
-use rotary_encoder_embedded::RotaryEncoder;
 use ssd1306::{mode::DisplayConfig as _, prelude::Brightness};
 
 use {defmt_rtt as _, panic_probe as _};
-
-use embedded_graphics::Drawable as _;
 
 bind_interrupts!(struct Irqs {
     I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
@@ -57,23 +43,25 @@ bind_interrupts!(struct Irqs {
 
 const SAMPLE_RATE: u32 = 48_000;
 
-type ControlPanelChannel = embassy_sync::channel::Channel<ThreadModeRawMutex, ControlsState, 16>;
-static CONTROL_PANEL_CHANNEL: ControlPanelChannel = embassy_sync::channel::Channel::new();
+// type ControlPanelChannel = embassy_sync::channel::Channel<ThreadModeRawMutex, ControlsState, 16>;
+// static CONTROL_PANEL_CHANNEL: ControlPanelChannel = embassy_sync::channel::Channel::new();
 
-// #[derive(Clone, Copy)]
-// struct Controls {
-//     main_enc: i32,
-// }
+const SOUND_BUFFER_SIZE: usize = 1000;
+type SoundBuffer = [u16; SOUND_BUFFER_SIZE];
+type SoundChannel = embassy_sync::channel::Channel<ThreadModeRawMutex, SoundBuffer, 8>;
+static SOUND_CHANNEL: SoundChannel = embassy_sync::channel::Channel::new();
 
 #[embassy_executor::task]
 async fn status_led(pin: impl Pin) {
+    info!("Status LED running...");
+
     let mut led = Output::new(pin, Level::High, Speed::Low);
     loop {
         info!("Okay");
         led.set_low();
-        Timer::after_millis(1000).await;
-        led.set_high();
         Timer::after_millis(10000).await;
+        led.set_high();
+        Timer::after_millis(1000).await;
     }
 }
 
@@ -88,19 +76,82 @@ async fn control_panel(
     }
 }
 
-// #[embassy_executor::task]
-// async fn display(display: impl DrawTarget) {
-//     loop {
-//         let
-//     }
-// }
-
-// #[embassy_executor::task]
-// async fn status_led(pin: impl Pin) {}
+#[embassy_executor::task]
+async fn playback(
+    channel: Receiver<'static, ThreadModeRawMutex, SoundBuffer, 8>,
+    mut i2s: I2S<'static>,
+) {
+    loop {
+        let buf = channel.receive().await;
+        i2s.write(&buf).await.unwrap();
+        Timer::after_micros(10).await;
+        info!("Sent to i2s");
+    }
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     info!("Program entered");
+
+    let mut config = embassy_stm32::Config::default();
+
+    // { stm32f411
+    //     use embassy_stm32::rcc::*;
+
+    //     config.rcc.sys = Sysclk::PLL1_P;
+    //     config.rcc.hse = Some(Hse {
+    //         freq: Hertz::mhz(25),
+    //         mode: HseMode::Oscillator,
+    //     });
+    //     config.rcc.pll_src = PllSource::HSE;
+    //     config.rcc.pll = Some(Pll {
+    //         // 16MHz HSI
+    //         prediv: PllPreDiv::DIV25,
+    //         mul: PllMul::MUL192,
+    //         divp: Some(PllPDiv::DIV2),
+    //         divq: Some(PllQDiv::DIV4),
+    //         divr: Some(PllRDiv::DIV2),
+    //     });
+    //     config.rcc.plli2s = Some(Pll {
+    //         prediv: PllPreDiv::DIV12,
+    //         mul: PllMul::MUL50,
+    //         divp: Some(PllPDiv::DIV2),
+    //         divq: Some(PllQDiv::DIV4),
+    //         divr: Some(PllRDiv::DIV2),
+    //     });
+    //     config.rcc.ahb_pre = AHBPrescaler::DIV1;
+    //     config.rcc.apb1_pre = APBPrescaler::DIV2; // Must give <=50MHz
+    // }
+
+    {
+        // Stm32f412re
+        use embassy_stm32::rcc::*;
+
+        config.rcc.hsi = true;
+        // config.rcc.hse = Some(Hse {
+        //     freq: Hertz::mhz(8),
+        //     mode: HseMode::Oscillator,
+        // });
+        config.rcc.sys = Sysclk::PLL1_P;
+        config.rcc.pll_src = PllSource::HSI;
+        config.rcc.pll = Some(Pll {
+            prediv: PllPreDiv::DIV16,
+            mul: PllMul::MUL192,
+            divp: Some(PllPDiv::DIV2),
+            divq: Some(PllQDiv::DIV2),
+            divr: Some(PllRDiv::DIV2),
+        });
+        config.rcc.plli2s = Some(Pll {
+            prediv: PllPreDiv::DIV16,
+            mul: PllMul::MUL384,
+            divp: Some(PllPDiv::DIV2),
+            divq: Some(PllQDiv::DIV2),
+            divr: Some(PllRDiv::DIV2),
+        });
+        config.rcc.apb1_pre = APBPrescaler::DIV2;
+    }
+
+    let p = embassy_stm32::init(config);
 
     unsafe { init_global_heap() };
     {
@@ -110,49 +161,50 @@ async fn main(spawner: Spawner) {
         info!("HEAP Check with vector ran successfully");
     }
 
-    let mut config = embassy_stm32::Config::default();
-
-    {
-        use embassy_stm32::rcc::*;
-
-        config.rcc.sys = Sysclk::PLL1_P;
-        config.rcc.hse = Some(Hse {
-            freq: Hertz::mhz(25),
-            mode: HseMode::Oscillator,
-        });
-        config.rcc.pll_src = PllSource::HSE;
-        config.rcc.pll = Some(Pll {
-            // 16MHz HSI
-            prediv: PllPreDiv::DIV25,
-            mul: PllMul::MUL192,
-            divp: Some(PllPDiv::DIV2),
-            divq: Some(PllQDiv::DIV4),
-            divr: Some(PllRDiv::DIV2),
-        });
-        config.rcc.plli2s = Some(Pll {
-            prediv: PllPreDiv::DIV12,
-            mul: PllMul::MUL50,
-            divp: Some(PllPDiv::DIV2),
-            divq: Some(PllQDiv::DIV4),
-            divr: Some(PllRDiv::DIV2),
-        });
-        config.rcc.ahb_pre = AHBPrescaler::DIV1;
-        config.rcc.apb1_pre = APBPrescaler::DIV2; // Must give <=50MHz
-    }
-
-    let p = embassy_stm32::init(config);
-
     info!(
         "SYS CLOCK FREQUENCY: {}",
         embassy_stm32::rcc::frequency::<peripherals::SYSCFG>()
     );
 
-    spawner.spawn(status_led(p.PC13)).unwrap();
+    // spawner
+    //     .spawn(control_panel(
+    //         CONTROL_PANEL_CHANNEL.sender(),
+    //         ControlPanel::new((p.PA9, p.PA8), (p.PA12, p.PA11), (p.PA1, p.PA0)),
+    //     ))
+    //     .unwrap();
+
+    spawner.spawn(status_led(p.PB2)).unwrap();
+
+    let mut i2s = {
+        let mut i2s_config = i2s::Config::default();
+
+        i2s_config.mode = i2s::Mode::Master;
+        i2s_config.standard = i2s::Standard::Philips;
+        i2s_config.format = i2s::Format::Data16Channel16;
+        i2s_config.clock_polarity = i2s::ClockPolarity::IdleLow;
+        i2s_config.master_clock = true;
+
+        let i2s = I2S::new_txonly(
+            p.SPI3,
+            p.PB5,
+            p.PA4,
+            p.PB3,
+            p.PC7,
+            p.DMA1_CH7,
+            Hertz::hz(SAMPLE_RATE * 32),
+            i2s_config,
+        );
+
+        info!(
+            "I2S clock frequency: {}",
+            embassy_stm32::rcc::frequency::<peripherals::SPI3>()
+        );
+
+        i2s
+    };
+
     spawner
-        .spawn(control_panel(
-            CONTROL_PANEL_CHANNEL.sender(),
-            ControlPanel::new((p.PA9, p.PA8), (p.PA12, p.PA11), (p.PA1, p.PA0)),
-        ))
+        .spawn(playback(SOUND_CHANNEL.receiver(), i2s))
         .unwrap();
 
     let mut display = {
@@ -160,8 +212,8 @@ async fn main(spawner: Spawner) {
 
         let display_i2c = i2c::I2c::new(
             p.I2C1,
-            p.PB8,
-            p.PB9,
+            p.PB6,
+            p.PB7,
             Irqs,
             p.DMA1_CH1,
             p.DMA1_CH5,
@@ -189,121 +241,27 @@ async fn main(spawner: Spawner) {
         display.flush().unwrap();
         Timer::after_secs(1).await;
 
-        display.clear(BinaryColor::Off).unwrap();
-        display.flush().unwrap();
+        // display.clear(BinaryColor::Off).unwrap();
+        // display.flush().unwrap();
 
         display
     };
 
-    // let mut spi3 = {
-    //     let mut spi_cfg = spi::Config::default();
-    //     let mut spi = spi::Spi::new(p.SPI3, p.PB3, p.PB5, p.PB4, p.DMA1_CH7, p.DMA1_CH2, spi_cfg);
+    let mut sound = SimpleFormSource::infinite_stereo(
+        SAMPLE_RATE,
+        paw::audio::osc::simple_form::WaveForm::Sine,
+        480.0,
+    );
 
-    //     info!("Sending spi data");
-    //     spi.write(&[1u16, 2, 3, 4, 5, 6, 7]).await.unwrap();
-    // };
+    let mut buf = [0u16; SOUND_BUFFER_SIZE];
 
-    // let mut i2s = {
-    //     let mut i2s_config = i2s::Config::default();
-
-    //     // i2s_config.mode = i2s::Mode::Master;
-    //     // i2s_config.function = i2s::Function::Transmit;
-    //     // i2s_config.standard = i2s::Standard::Philips;
-    //     // i2s_config.format = i2s::Format::Data16Channel16;
-    //     // i2s_config.clock_polarity = i2s::ClockPolarity::IdleLow;
-    //     // i2s_config.master_clock = false;
-
-    //     let i2s = I2S::new(
-    //         p.SPI2,
-    //         p.PB15,
-    //         p.PB12,
-    //         p.PB10,
-    //         p.PA3,
-    //         p.DMA1_CH4,
-    //         p.DMA1_CH3,
-    //         // Hertz::hz(SAMPLE_RATE),
-    //         Hertz::mhz(1),
-    //         i2s_config,
-    //     );
-
-    //     info!(
-    //         "I2S clock frequency: {}",
-    //         embassy_stm32::rcc::frequency::<peripherals::SPI2>()
-    //     );
-
-    //     i2s
-    // };
-
-    // let mut sound = SimpleFormSource::infinite_stereo(
-    //     SAMPLE_RATE,
-    //     paw::audio::osc::simple_form::WaveForm::Square,
-    //     220.0,
-    // );
-
-    // let mut adsr_edit = AdsrEdit {
-    //     adsr,
-    //     active: AdsrStage::Delay,
-    // };
-
-    // let mut select = SelectView::new(
-    //     &["abc", "bcd", "cde", "def", "efg"],
-    //     0,
-    //     Rectangle::new(Point::zero(), Size::new(42, 8)),
-    //     MonoTextStyleBuilder::new()
-    //         .font(&FONT_MEDIUM)
-    //         .text_color(BinaryColor::On)
-    //         .background_color(BinaryColor::Off)
-    //         .build(),
-    //     true,
-    // );
-
-    // let btn1 = component!(Button {});
-    // let btn2 = component!(Button {});
-
-    // LinearLayout::horizontal(Chain::new(btn1).append(btn2)).drs;
-
-    display.flush().unwrap();
+    for s in buf.iter_mut() {
+        *s = (sound.next_sample() * i16::MAX as f32) as i16 as u16;
+    }
 
     info!("Starting main loop...");
     loop {
-        // let mut buf = [0u16; 8];
-
-        // for s in buf.iter_mut() {
-        //     *s = (sound.next_sample() * i16::MAX as f32) as i16 as u16;
-        // }
-
-        // info!("Sending i2s data");
-        // i2s.write(&buf).await.unwrap();
-
-        if let ControlsState::Changed(state) = CONTROL_PANEL_CHANNEL.receive().await {
-            info!("Changed");
-
-            // if let EncoderState::Changed(mut main_encoder_state) = main_enc {
-            //     if main_encoder_state < 0 {
-            //         while main_encoder_state != 0 {
-            //             main_encoder_state += 1;
-            //             adsr_edit.active = adsr_edit.prev_stage();
-            //         }
-            //     } else {
-            //         while main_encoder_state != 0 {
-            //             main_encoder_state -= 1;
-            //             adsr_edit.active = adsr_edit.next_stage();
-            //         }
-            //     }
-            // }
-
-            // if let AccelEncoderState::Changed((state, vel)) = red_enc {
-            //     adsr_edit.edit_first_param(state, vel);
-            // }
-
-            // if let AccelEncoderState::Changed((state, vel)) = green_enc {
-            //     adsr_edit.edit_second_param(state, vel);
-            // }
-
-            // // info!("ADSR: {}", adsr_edit);
-            // adsr_edit.draw(&mut display).unwrap();
-
-            display.flush().unwrap();
-        }
+        SOUND_CHANNEL.send(buf).await;
+        info!("Sent to playback");
     }
 }
