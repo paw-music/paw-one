@@ -1,10 +1,11 @@
-use embassy_stm32::{gpio::Pin, Peripheral};
+use embedded_hal::digital::v2::InputPin;
 use rotary_encoder_embedded::{angular_velocity::AngularVelocityMode, standard::StandardMode};
 
 use self::enc::{AccelEncoderState, Encoder, EncoderState};
 
 pub mod enc;
 
+#[derive(defmt::Format)]
 pub struct ControlsStateChanged {
     pub main_enc: EncoderState,
     pub red_enc: AccelEncoderState,
@@ -40,26 +41,43 @@ impl ControlsStateBuilder {
     }
 }
 
-pub struct ControlPanel<'a> {
-    main_enc: Encoder<'a, StandardMode>,
-    red_enc: Encoder<'a, AngularVelocityMode>,
-    green_enc: Encoder<'a, AngularVelocityMode>,
+// pub trait ControlPanelPins {
+//     type MainEncDt: InputPin;
+//     type MainEncClk: InputPin;
+
+//     type RedEncDt: InputPin;
+//     type RedEncClk: InputPin;
+
+//     type GreenEncDt: InputPin;
+//     type GreenEncClk: InputPin;
+// }
+
+pub struct ControlPanel<
+    MainEncDt: InputPin,
+    MainEncClk: InputPin,
+    RedEncDt: InputPin,
+    RedEncClk: InputPin,
+    GreenEncDt: InputPin,
+    GreenEncClk: InputPin,
+> {
+    main_enc: Encoder<StandardMode, MainEncDt, MainEncClk>,
+    red_enc: Encoder<AngularVelocityMode, RedEncDt, RedEncClk>,
+    green_enc: Encoder<AngularVelocityMode, GreenEncDt, GreenEncClk>,
 }
 
-impl<'a> ControlPanel<'a> {
+impl<
+        MainEncDt: InputPin,
+        MainEncClk: InputPin,
+        RedEncDt: InputPin,
+        RedEncClk: InputPin,
+        GreenEncDt: InputPin,
+        GreenEncClk: InputPin,
+    > ControlPanel<MainEncDt, MainEncClk, RedEncDt, RedEncClk, GreenEncDt, GreenEncClk>
+{
     pub fn new(
-        main_enc: (
-            impl Peripheral<P = impl Pin> + 'a,
-            impl Peripheral<P = impl Pin> + 'a,
-        ),
-        red_enc: (
-            impl Peripheral<P = impl Pin> + 'a,
-            impl Peripheral<P = impl Pin> + 'a,
-        ),
-        green_enc: (
-            impl Peripheral<P = impl Pin> + 'a,
-            impl Peripheral<P = impl Pin> + 'a,
-        ),
+        main_enc: (MainEncDt, MainEncClk),
+        red_enc: (RedEncDt, RedEncClk),
+        green_enc: (GreenEncDt, GreenEncClk),
     ) -> Self {
         Self {
             main_enc: Encoder::new_standard(main_enc.0, main_enc.1),
@@ -68,11 +86,11 @@ impl<'a> ControlPanel<'a> {
         }
     }
 
-    pub fn tick(&mut self) -> ControlsState {
+    pub fn tick(&mut self, now_millis: u64) -> ControlsState {
         ControlsStateBuilder {
             main_enc: self.main_enc.tick(),
-            red_enc: self.red_enc.tick(),
-            green_enc: self.green_enc.tick(),
+            red_enc: self.red_enc.tick(now_millis),
+            green_enc: self.green_enc.tick(now_millis),
         }
         .build()
     }

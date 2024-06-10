@@ -1,10 +1,5 @@
-use defmt::info;
-use embassy_stm32::{
-    gpio::{Input, Pin},
-    time::Hertz,
-    Peripheral,
-};
-use embassy_time::Instant;
+// use embassy_time::Instant;
+use embedded_hal::digital::v2::InputPin;
 use rotary_encoder_embedded::{
     angular_velocity::AngularVelocityMode, standard::StandardMode, RotaryEncoder,
 };
@@ -12,32 +7,29 @@ use rotary_encoder_embedded::{
 const UPDATE_FREQUENCY: u64 = 10;
 const VELOCITY_DEC_FREQUENCY: u64 = 10;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, defmt::Format)]
 pub enum EncoderState {
     #[default]
     None,
     Changed(i32),
 }
 
-pub struct Encoder<'a, MODE> {
-    enc: RotaryEncoder<MODE, Input<'a>, Input<'a>>,
+pub struct Encoder<MODE, DT, CLK> {
+    enc: RotaryEncoder<MODE, DT, CLK>,
     state: i32,
-    last_update: Instant,
+    last_update: u64,
 }
 
-impl<'a> Encoder<'a, StandardMode> {
-    pub fn new_standard(
-        dt: impl Peripheral<P = impl Pin> + 'a,
-        clk: impl Peripheral<P = impl Pin> + 'a,
-    ) -> Self {
+impl<DT, CLK> Encoder<StandardMode, DT, CLK>
+where
+    DT: InputPin,
+    CLK: InputPin,
+{
+    pub fn new_standard(dt: DT, clk: CLK) -> Self {
         Self {
-            enc: RotaryEncoder::new(
-                Input::new(dt, embassy_stm32::gpio::Pull::Up),
-                Input::new(clk, embassy_stm32::gpio::Pull::Up),
-            )
-            .into_standard_mode(),
+            enc: RotaryEncoder::new(dt, clk).into_standard_mode(),
             state: 0,
-            last_update: Instant::now(),
+            last_update: 0,
         }
     }
 
@@ -63,23 +55,20 @@ impl<'a> Encoder<'a, StandardMode> {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, defmt::Format)]
 pub enum AccelEncoderState {
     #[default]
     None,
     Changed((i32, f32)),
 }
 
-impl<'a> Encoder<'a, AngularVelocityMode> {
-    pub fn new(
-        dt: impl Peripheral<P = impl Pin> + 'a,
-        clk: impl Peripheral<P = impl Pin> + 'a,
-    ) -> Self {
-        let mut enc = RotaryEncoder::new(
-            Input::new(dt, embassy_stm32::gpio::Pull::Up),
-            Input::new(clk, embassy_stm32::gpio::Pull::Up),
-        )
-        .into_angular_velocity_mode();
+impl<DT, CLK> Encoder<AngularVelocityMode, DT, CLK>
+where
+    DT: InputPin,
+    CLK: InputPin,
+{
+    pub fn new(dt: DT, clk: CLK) -> Self {
+        let mut enc = RotaryEncoder::new(dt, clk).into_angular_velocity_mode();
 
         enc.set_velocity_action_ms(5);
         enc.set_velocity_dec_factor(0.01);
@@ -88,14 +77,12 @@ impl<'a> Encoder<'a, AngularVelocityMode> {
         Self {
             enc,
             state: 0,
-            last_update: Instant::now(),
+            last_update: 0,
         }
     }
 
-    pub fn tick(&mut self) -> AccelEncoderState {
-        let now = Instant::now();
-
-        let elapsed = self.last_update.elapsed().as_millis();
+    pub fn tick(&mut self, now_millis: u64) -> AccelEncoderState {
+        let elapsed = now_millis - self.last_update;
 
         let mut dec_times = elapsed / VELOCITY_DEC_FREQUENCY;
         while dec_times > 0 {
@@ -103,7 +90,7 @@ impl<'a> Encoder<'a, AngularVelocityMode> {
             dec_times -= 1;
         }
 
-        self.enc.update(now.as_millis());
+        self.enc.update(now_millis);
 
         match self.enc.direction() {
             rotary_encoder_embedded::Direction::None => {}
@@ -122,7 +109,7 @@ impl<'a> Encoder<'a, AngularVelocityMode> {
         let state = self.state;
 
         self.state = 0;
-        self.last_update = now;
+        self.last_update = now_millis;
 
         match state {
             0 => AccelEncoderState::None,
