@@ -10,10 +10,9 @@ use cortex_m::interrupt::Mutex;
 use defmt::*;
 use stm32f4xx_hal::{
     gpio::GpioExt,
-    interrupt,
-    pac::{Peripherals, NVIC, TIM5},
+    pac::{Peripherals, TIM5},
     prelude::*,
-    timer::{CounterHz, Event, Flag},
+    timer::{CounterHz},
 };
 use {defmt_rtt as _, panic_probe as _};
 

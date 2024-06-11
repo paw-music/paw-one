@@ -3,7 +3,6 @@ use embedded_hal::digital::v2::InputPin;
 use rotary_encoder_embedded::{
     angular_velocity::AngularVelocityMode, standard::StandardMode, RotaryEncoder,
 };
-use stm32f4xx_hal::gpio::{ExtiPin, PinExt};
 
 const UPDATE_FREQUENCY: u32 = 10;
 const VELOCITY_DEC_FREQUENCY: u32 = 10;
@@ -23,8 +22,8 @@ pub struct Encoder<MODE, DT, CLK> {
 
 impl<DT, CLK> Encoder<StandardMode, DT, CLK>
 where
-    DT: InputPin + PinExt,
-    CLK: InputPin + ExtiPin,
+    DT: InputPin,
+    CLK: InputPin,
 {
     pub fn new_standard(dt: DT, clk: CLK) -> Self {
         Self {

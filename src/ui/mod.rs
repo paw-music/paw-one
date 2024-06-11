@@ -4,7 +4,9 @@ pub mod fps;
 pub mod logo;
 
 #[derive(Clone)]
-pub enum Message {}
+pub enum Message {
+    None,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Event {

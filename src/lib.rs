@@ -13,10 +13,7 @@ pub mod ui;
 #[macro_use]
 extern crate alloc;
 
-use core::{
-    cell::RefCell,
-    sync::atomic::{AtomicU32, AtomicUsize},
-};
+use core::{cell::RefCell, sync::atomic::AtomicU32};
 
 use cortex_m::interrupt::Mutex;
 use cortex_m_semihosting::debug;
@@ -28,7 +25,7 @@ use stm32_i2s_v12x::{
     marker::{Data32Channel32, Master, Philips, Transmit},
     transfer::I2sTransfer,
 };
-use stm32f4xx_hal::{i2c::I2c, i2s::I2s3};
+use stm32f4xx_hal::i2s::I2s3;
 
 #[inline(never)]
 #[defmt::panic_handler]

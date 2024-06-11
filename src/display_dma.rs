@@ -8,7 +8,6 @@ use display_interface::{DataFormat, DisplayError, WriteOnlyDataCommand};
 use stm32f4xx_hal::{
     dma::Stream1,
     i2c::{
-        self,
         dma::{I2CMasterDma, I2CMasterWriteDMA as _, NoDMA, TxDMA},
     },
     pac::{DMA1, I2C1},

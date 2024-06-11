@@ -6,11 +6,10 @@ extern crate alloc;
 #[macro_use]
 extern crate paw_one;
 
-use core::{borrow::Borrow, cell::RefCell, ops::DerefMut, sync::atomic::AtomicUsize};
+use core::{cell::RefCell, sync::atomic::AtomicUsize};
 
 use alloc::format;
-use cortex_m::{asm, interrupt::Mutex};
-use defmt::*;
+use cortex_m::interrupt::Mutex;
 use defmt::*;
 use embedded_graphics::{
     draw_target::DrawTarget,
@@ -18,87 +17,72 @@ use embedded_graphics::{
     image::Image,
     mono_font::{ascii::FONT_4X6, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
-    primitives::{PrimitiveStyleBuilder, Rectangle, StyledDrawable},
-    text::Text,
+    primitives::Rectangle,
     Drawable,
 };
-use embedded_hal::digital::v2::OutputPin;
-use embedded_hal_1::delay::DelayNs;
 use embedded_text::TextBox;
-use embedded_ui::{
-    col,
-    event::EventStub,
-    helpers::{select, text},
-    ui::UI,
-};
+use embedded_ui::{col, helpers::select, ui::UI};
 use micromath::F32Ext;
-use nb::block;
-use paw::audio::{osc::simple_form::SimpleFormSource, source::AudioSourceIter};
 use paw_one::{
-    control::{ControlPanel, ControlsState},
+    control::{btn::PullUp, ControlPanel, ControlsState},
     display_dma::{DisplayI2cDma, DISPLAY_I2C},
     heap::init_global_heap,
     millis,
     synth::Synth,
     ui::{fps::FPS, logo::LOGO, Message},
-    Display, DmaAudioBuffer, MainI2s, AUDIO_BUFFER, AUDIO_BUFFER_SIZE, DMA_AUDIO_BUFFER_SIZE,
-    ELAPSED_MS, SAMPLE_RATE,
+    DmaAudioBuffer, AUDIO_BUFFER, AUDIO_BUFFER_SIZE, ELAPSED_MS, SAMPLE_RATE,
 };
 use ssd1306::{mode::DisplayConfig as _, prelude::Brightness};
 use stm32_i2s_v12x::{
     driver::{I2sDriver, I2sDriverConfig},
-    marker::{Data16Channel16, Data32Channel32, Master, Philips, Transmit},
-    transfer::{I2sTransfer, I2sTransferConfig},
+    marker::{Master, Philips, Transmit},
 };
 use stm32f4xx_hal::{
     dma::{config::DmaConfig, DmaFlag, MemoryToPeripheral, Stream5, StreamsTuple, Transfer},
-    dwt::{Dwt, DwtExt, MonoTimer},
     i2s::I2s3,
-    pac::{DMA1, DWT, SPI3, TIM3, TIM4},
+    pac::{DMA1, TIM3},
     prelude::*,
-    rcc::{BusTimerClock, Enable},
-    rtc::Rtc,
-    timer::{CounterHz, CounterUs, Event, Flag},
+    timer::{CounterHz, Event, Flag},
 };
 use stm32f4xx_hal::{
-    gpio::{GpioExt, NoPin},
+    gpio::GpioExt,
     i2c::{self, I2c},
     i2s::I2s,
     interrupt,
-    pac::{Peripherals, NVIC, TIM1, TIM2, TIM5},
+    pac::{Peripherals, NVIC, TIM5},
     prelude::_fugit_RateExtU32,
     rcc::RccExt,
-    timer::{CounterMs, Delay, DelayMs, Timer, TimerExt},
+    timer::TimerExt,
 };
 use {defmt_rtt as _, panic_probe as _};
 
 // static I2S_TIMER: Mutex<RefCell<Option<CounterHz<TIM2>>>> = Mutex::new(RefCell::new(None));
-// static SYNTH_TIMER: Mutex<RefCell<Option<CounterHz<TIM3>>>> = Mutex::new(RefCell::new(None));
 // static UI_TIMER: Mutex<RefCell<Option<CounterHz<TIM4>>>> = Mutex::new(RefCell::new(None));
 // static DISPLAY: Mutex<RefCell<Option<Display>>> = Mutex::new(RefCell::new(None));
-// static SYNTH: Mutex<RefCell<Option<Synth>>> = Mutex::new(RefCell::new(None));
+static SYNTH_TIMER: Mutex<RefCell<Option<CounterHz<TIM3>>>> = Mutex::new(RefCell::new(None));
+static SYNTH: Mutex<RefCell<Option<Synth>>> = Mutex::new(RefCell::new(None));
 // static I2S: Mutex<RefCell<Option<I2sDriver<I2s<SPI3>, Master, Transmit, Philips>>>> =
 //     Mutex::new(RefCell::new(None));
 // static I2S: Mutex<
 //     RefCell<Option<I2sTransfer<I2s<SPI3>, Master, Transmit, Philips, Data32Channel32>>>,
 // > = Mutex::new(RefCell::new(None));
-// static AUDIO_BUFFER_UNDERRUN_COUNT: AtomicUsize = AtomicUsize::new(0);
+static AUDIO_BUFFER_UNDERRUN_COUNT: AtomicUsize = AtomicUsize::new(0);
 static COMMON_TIMER: Mutex<RefCell<Option<CounterHz<TIM5>>>> = Mutex::new(RefCell::new(None));
 // static CONTROLS_STATE: Mutex<RefCell<Option<ControlsState>>> = Mutex::new(RefCell::new(None));
-static CONTROL_PANEL: Mutex<
-    RefCell<
-        Option<
-            ControlPanel<
-                stm32f4xx_hal::gpio::Pin<'A', 0>,
-                stm32f4xx_hal::gpio::Pin<'A', 1>,
-                stm32f4xx_hal::gpio::Pin<'A', 3>,
-                stm32f4xx_hal::gpio::Pin<'A', 5>,
-                stm32f4xx_hal::gpio::Pin<'C', 0>,
-                stm32f4xx_hal::gpio::Pin<'C', 1>,
-            >,
-        >,
-    >,
-> = Mutex::new(RefCell::new(None));
+// static CONTROL_PANEL: Mutex<
+//     RefCell<
+//         Option<
+//             ControlPanel<
+//                 stm32f4xx_hal::gpio::Pin<'A', 0>,
+//                 stm32f4xx_hal::gpio::Pin<'A', 1>,
+//                 stm32f4xx_hal::gpio::Pin<'A', 3>,
+//                 stm32f4xx_hal::gpio::Pin<'A', 5>,
+//                 stm32f4xx_hal::gpio::Pin<'C', 0>,
+//                 stm32f4xx_hal::gpio::Pin<'C', 1>,
+//             >,
+//         >,
+//     >,
+// > = Mutex::new(RefCell::new(None));
 
 type I2sDmaTransfer = Transfer<
     Stream5<DMA1>,
@@ -180,19 +164,19 @@ fn I2C1_ER() {
 //     info!("DMA1_STREAM5");
 // }
 
-// #[interrupt]
-// fn TIM3() {
-//     cortex_m::interrupt::free(|cs| {
-//         SYNTH_TIMER
-//             .borrow(cs)
-//             .borrow_mut()
-//             .as_mut()
-//             .unwrap()
-//             .clear_flags(Flag::Update);
+#[interrupt]
+fn TIM3() {
+    cortex_m::interrupt::free(|cs| {
+        SYNTH_TIMER
+            .borrow(cs)
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .clear_flags(Flag::Update);
 
-//         SYNTH.borrow(cs).borrow_mut().as_mut().unwrap().tick();
-//     });
-// }
+        SYNTH.borrow(cs).borrow_mut().as_mut().unwrap().tick();
+    });
+}
 
 // #[interrupt]
 // fn TIM4() {
@@ -223,7 +207,7 @@ fn DMA1_STREAM5() {
 
     let flags = transfer.flags();
 
-    // transfer.clear_flags(DmaFlag::FifoError);
+    transfer.clear_flags(DmaFlag::FifoError);
 
     if flags.is_transfer_complete() {
         cortex_m::interrupt::free(|cs| {
@@ -250,63 +234,27 @@ fn DMA1_STREAM5() {
                             pointer += 4;
                         }
 
-                        // if pointer < buffer.len() {
-                        //     defmt::panic!("Underrun");
-                        // }
+                        if pointer < buffer.len() {
+                            // defmt::panic!("Underrun");
+                            AUDIO_BUFFER_UNDERRUN_COUNT
+                                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        }
                         (buffer, ())
                     })
                     .unwrap();
             }
         });
     }
+    if flags.is_fifo_error() {
+        warn!("I2S DMA Stream FIFO Error!");
+    }
+    if flags.is_transfer_error() {
+        warn!("I2S DMA Stream Transfer Error!");
+    }
     if flags.is_empty() {
-        info!("Audio buffer is empty!");
+        warn!("Audio buffer is empty!");
     }
 }
-
-// #[inline]
-// fn handle_exti() {
-//     cortex_m::interrupt::free(|cs| {
-//         // if let Some(cp) = CONTROL_PANEL.borrow(cs).borrow_mut().as_mut() {
-//         //     cp.handle_exti()
-//         // }
-//         CONTROL_PANEL
-//             .borrow(cs)
-//             .borrow_mut()
-//             .as_mut()
-//             .unwrap()
-//             .handle_exti();
-//     });
-// }
-
-// #[interrupt]
-// fn EXTI0() {
-//     handle_exti();
-// }
-// #[interrupt]
-// fn EXTI1() {
-//     handle_exti();
-// }
-// #[interrupt]
-// fn EXTI2() {
-//     handle_exti();
-// }
-// #[interrupt]
-// fn EXTI3() {
-//     handle_exti();
-// }
-// #[interrupt]
-// fn EXTI4() {
-//     handle_exti();
-// }
-// #[interrupt]
-// fn EXTI9_5() {
-//     handle_exti();
-// }
-// #[interrupt]
-// fn EXTI15_10() {
-//     handle_exti();
-// }
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
@@ -320,9 +268,9 @@ fn main() -> ! {
         info!("HEAP Check with vector ran successfully");
     }
 
-    let mut dp = Peripherals::take().unwrap();
-    let mut cp = cortex_m::peripheral::Peripherals::take().unwrap();
-    let mut syscfg = dp.SYSCFG.constrain();
+    let dp = Peripherals::take().unwrap();
+    let cp = cortex_m::peripheral::Peripherals::take().unwrap();
+    let syscfg = dp.SYSCFG.constrain();
 
     let gpioa = dp.GPIOA.split();
     let gpiob = dp.GPIOB.split();
@@ -419,31 +367,27 @@ fn main() -> ! {
     //     }
     // }
 
-    let mut synth = Synth::new();
+    let synth = Synth::new();
 
-    // cortex_m::interrupt::free(|cs| {
-    //     SYNTH.borrow(cs).borrow_mut().replace(synth);
-    // });
+    cortex_m::interrupt::free(|cs| {
+        SYNTH.borrow(cs).borrow_mut().replace(synth);
+    });
 
-    // for _ in 0..AUDIO_BUFFER_SIZE {
-    //     synth.tick();
-    // }
+    {
+        let mut synth_timer = dp.TIM3.counter_hz(&clocks);
+        synth_timer
+            .start((SAMPLE_RATE * 4).Hz())
+            .expect("Failed to initialize Synth timer TIM3");
+        synth_timer.listen(Event::Update);
 
-    // {
-    //     let mut synth_timer = dp.TIM3.counter_hz(&clocks);
-    //     synth_timer
-    //         .start(SAMPLE_RATE.Hz())
-    //         .expect("Failed to initialize Synth timer TIM3");
-    //     synth_timer.listen(Event::Update);
+        cortex_m::interrupt::free(|cs| {
+            *SYNTH_TIMER.borrow(cs).borrow_mut() = Some(synth_timer);
+        });
 
-    //     cortex_m::interrupt::free(|cs| {
-    //         *SYNTH_TIMER.borrow(cs).borrow_mut() = Some(synth_timer);
-    //     });
-
-    //     unsafe {
-    //         NVIC::unmask(interrupt::TIM3);
-    //     }
-    // }
+        unsafe {
+            NVIC::unmask(interrupt::TIM3);
+        }
+    }
 
     // {
     //     let mut i2s_timer = dp.TIM2.counter_hz(&clocks);
@@ -496,7 +440,7 @@ fn main() -> ! {
         }
     }
 
-    let mut i2s = {
+    let i2s = {
         let pins = (gpioa.pa4, gpiob.pb12, gpioc.pc7, gpiob.pb5);
         let i2s = I2s::new(dp.SPI3, pins, &clocks);
 
@@ -552,36 +496,41 @@ fn main() -> ! {
         }
     }
 
-    // let mut ui = {
-    //     let root = col![select(["55", "110", "220", "440", "880", "1760"])];
-    //     let mut ui = UI::<Message, _, EventStub, _>::new(root, display.bounding_box().size.into())
-    //         .monochrome();
+    let mut ui = {
+        let root = col![
+            select(["55", "110", "220", "440", "880", "1760"]).on_change(|new| {
+                info!("Select changed to {}", new);
+                Message::None
+            })
+        ];
+        let mut ui = UI::new(root, display.bounding_box().size.into()).monochrome();
 
-    //     ui.auto_focus();
+        ui.auto_focus();
 
-    //     ui
-    // };
+        ui
+    };
 
-    let control_panel = {
-        let mut main_enc = (gpioa.pa0, gpioa.pa1);
+    let mut control_panel = {
+        let main_enc = (gpioa.pa0, gpioa.pa1);
+        let main_enc_btn = (gpioa.pa2, PullUp);
         let red_enc = (gpioa.pa3, gpioa.pa5);
         let green_enc = (gpioc.pc0, gpioc.pc1);
 
-        ControlPanel::new(main_enc, red_enc, green_enc)
+        ControlPanel::new(main_enc, main_enc_btn, red_enc, green_enc)
     };
 
-    cortex_m::interrupt::free(|cs| {
-        *CONTROL_PANEL.borrow(cs).borrow_mut() = Some(control_panel);
-    });
+    // cortex_m::interrupt::free(|cs| {
+    //     *CONTROL_PANEL.borrow(cs).borrow_mut() = Some(control_panel);
+    // });
 
-    cortex_m::interrupt::free(|cs| {
-        CONTROL_PANEL
-            .borrow(cs)
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .configure_interrupts(&mut syscfg, &mut dp.EXTI);
-    });
+    // cortex_m::interrupt::free(|cs| {
+    //     CONTROL_PANEL
+    //         .borrow(cs)
+    //         .borrow_mut()
+    //         .as_mut()
+    //         .unwrap()
+    //         .configure_interrupts(&mut syscfg, &mut dp.EXTI);
+    // });
 
     let mut last_frame_ms = millis();
 
@@ -594,20 +543,35 @@ fn main() -> ! {
     loop {
         let now = millis();
 
-        synth.tick();
+        // synth.tick();
 
-        // if let ControlsState::Changed(changed) = control_panel.tick(now) {
-        //     info!("Changed {}", changed);
-        //     ui.tick(changed.into_events().into_iter());
-        // }
+        if let ControlsState::Changed(changed) = control_panel.tick(now) {
+            info!("Changed {}", changed);
+            ui.tick(changed.into_events().into_iter());
+        }
 
         if now - last_frame_ms > FPS_MS_PERIOD {
-            // ui.draw(&mut display);
+            ui.draw(&mut display);
 
             // Text::new(format!("{}FPS", ), Point::new(x, y), character_style)
             TextBox::new(
                 &format!("{}FPS", fps.value().round() as u32),
                 Rectangle::new(Point::new(0, 0), Size::new(24, 7)),
+                MonoTextStyleBuilder::new()
+                    .font(&FONT_4X6)
+                    .text_color(BinaryColor::On)
+                    .background_color(BinaryColor::Off)
+                    .build(),
+            )
+            .draw(&mut display)
+            .unwrap();
+
+            TextBox::new(
+                &format!(
+                    "UDR: {}",
+                    AUDIO_BUFFER_UNDERRUN_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+                ),
+                Rectangle::new(Point::new(0, 25), Size::new(64, 6)),
                 MonoTextStyleBuilder::new()
                     .font(&FONT_4X6)
                     .text_color(BinaryColor::On)

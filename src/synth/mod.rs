@@ -1,11 +1,7 @@
-use defmt::info;
-use embedded_graphics::geometry::Dimensions;
-use embedded_ui::{col, event::EventStub, style::monochrome::Monochrome, ui::UI};
 use paw::audio::{osc::simple_form::SimpleFormSource, source::AudioSourceIter};
 
 use crate::{
-    control::ControlPanel, ui::Message, DmaAudioBuffer, AUDIO_BUFFER, AUDIO_BUFFER_SIZE,
-    DMA_AUDIO_BUFFER_SIZE, SAMPLE_RATE,
+    AUDIO_BUFFER, SAMPLE_RATE,
 };
 
 #[derive(Clone, Copy)]
