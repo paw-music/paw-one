@@ -42,7 +42,7 @@ use paw_one::{
     synth::Synth,
     ui::{fps::FPS, logo::LOGO, Message},
     Display, DmaAudioBuffer, MainI2s, AUDIO_BUFFER, AUDIO_BUFFER_SIZE, DMA_AUDIO_BUFFER_SIZE,
-    ELAPSED_US, SAMPLE_RATE,
+    ELAPSED_MS, SAMPLE_RATE,
 };
 use ssd1306::{mode::DisplayConfig as _, prelude::Brightness};
 use stm32_i2s_v12x::{
@@ -84,6 +84,21 @@ use {defmt_rtt as _, panic_probe as _};
 // > = Mutex::new(RefCell::new(None));
 // static AUDIO_BUFFER_UNDERRUN_COUNT: AtomicUsize = AtomicUsize::new(0);
 static COMMON_TIMER: Mutex<RefCell<Option<CounterHz<TIM5>>>> = Mutex::new(RefCell::new(None));
+// static CONTROLS_STATE: Mutex<RefCell<Option<ControlsState>>> = Mutex::new(RefCell::new(None));
+static CONTROL_PANEL: Mutex<
+    RefCell<
+        Option<
+            ControlPanel<
+                stm32f4xx_hal::gpio::Pin<'A', 0>,
+                stm32f4xx_hal::gpio::Pin<'A', 1>,
+                stm32f4xx_hal::gpio::Pin<'A', 3>,
+                stm32f4xx_hal::gpio::Pin<'A', 5>,
+                stm32f4xx_hal::gpio::Pin<'C', 0>,
+                stm32f4xx_hal::gpio::Pin<'C', 1>,
+            >,
+        >,
+    >,
+> = Mutex::new(RefCell::new(None));
 
 type I2sDmaTransfer = Transfer<
     Stream5<DMA1>,
@@ -133,7 +148,7 @@ fn TIM5() {
             .clear_flags(Flag::Update);
     });
 
-    ELAPSED_US.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    ELAPSED_MS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 }
 
 #[interrupt]
@@ -249,10 +264,52 @@ fn DMA1_STREAM5() {
     }
 }
 
+// #[inline]
+// fn handle_exti() {
+//     cortex_m::interrupt::free(|cs| {
+//         // if let Some(cp) = CONTROL_PANEL.borrow(cs).borrow_mut().as_mut() {
+//         //     cp.handle_exti()
+//         // }
+//         CONTROL_PANEL
+//             .borrow(cs)
+//             .borrow_mut()
+//             .as_mut()
+//             .unwrap()
+//             .handle_exti();
+//     });
+// }
+
+// #[interrupt]
+// fn EXTI0() {
+//     handle_exti();
+// }
+// #[interrupt]
+// fn EXTI1() {
+//     handle_exti();
+// }
+// #[interrupt]
+// fn EXTI2() {
+//     handle_exti();
+// }
+// #[interrupt]
+// fn EXTI3() {
+//     handle_exti();
+// }
+// #[interrupt]
+// fn EXTI4() {
+//     handle_exti();
+// }
+// #[interrupt]
+// fn EXTI9_5() {
+//     handle_exti();
+// }
+// #[interrupt]
+// fn EXTI15_10() {
+//     handle_exti();
+// }
+
 #[cortex_m_rt::entry]
 fn main() -> ! {
-    // #[embassy_executor::main]
-    // async fn main(spawner: Spawner) {
     info!("Program entered");
 
     unsafe { init_global_heap() };
@@ -265,6 +322,7 @@ fn main() -> ! {
 
     let mut dp = Peripherals::take().unwrap();
     let mut cp = cortex_m::peripheral::Peripherals::take().unwrap();
+    let mut syscfg = dp.SYSCFG.constrain();
 
     let gpioa = dp.GPIOA.split();
     let gpiob = dp.GPIOB.split();
@@ -294,14 +352,6 @@ fn main() -> ! {
         // .pclk1(48.MHz())
         // .pclk2(96.MHz())
         .freeze();
-
-    let mut control_panel = {
-        let main_enc = (gpioa.pa0, gpioa.pa1);
-        let red_enc = (gpioa.pa3, gpioa.pa5);
-        let green_enc = (gpioc.pc0, gpioc.pc1);
-
-        ControlPanel::new(main_enc, red_enc, green_enc)
-    };
 
     let mut display = {
         unsafe {
@@ -433,7 +483,7 @@ fn main() -> ! {
     {
         let mut common_timer = dp.TIM5.counter_hz(&clocks);
         common_timer
-            .start(1.MHz())
+            .start(1.kHz())
             .expect("Failed to start common timer TIM5");
         common_timer.listen(Event::Update);
 
@@ -449,14 +499,6 @@ fn main() -> ! {
     let mut i2s = {
         let pins = (gpioa.pa4, gpiob.pb12, gpioc.pc7, gpiob.pb5);
         let i2s = I2s::new(dp.SPI3, pins, &clocks);
-        // let i2s_config = I2sTransferConfig::new_master()
-        //     .transmit()
-        //     .standard(Philips)
-        //     .data_format(Data32Channel32)
-        //     .master_clock(true)
-        //     .request_frequency(SAMPLE_RATE);
-
-        // let mut i2s_transfer: MainI2s = I2sTransfer::new(i2s, i2s_config);
 
         let i2s_driver_config = I2sDriverConfig::new_master()
             .transmit()
@@ -520,10 +562,31 @@ fn main() -> ! {
     //     ui
     // };
 
+    let control_panel = {
+        let mut main_enc = (gpioa.pa0, gpioa.pa1);
+        let red_enc = (gpioa.pa3, gpioa.pa5);
+        let green_enc = (gpioc.pc0, gpioc.pc1);
+
+        ControlPanel::new(main_enc, red_enc, green_enc)
+    };
+
+    cortex_m::interrupt::free(|cs| {
+        *CONTROL_PANEL.borrow(cs).borrow_mut() = Some(control_panel);
+    });
+
+    cortex_m::interrupt::free(|cs| {
+        CONTROL_PANEL
+            .borrow(cs)
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .configure_interrupts(&mut syscfg, &mut dp.EXTI);
+    });
+
     let mut last_frame_ms = millis();
 
-    const FIXED_FPS: usize = 25;
-    const FPS_MS_PERIOD: usize = 1_000 / FIXED_FPS;
+    const FIXED_FPS: u32 = 25;
+    const FPS_MS_PERIOD: u32 = 1_000 / FIXED_FPS;
 
     let mut fps = FPS::new();
 
@@ -533,7 +596,14 @@ fn main() -> ! {
 
         synth.tick();
 
+        // if let ControlsState::Changed(changed) = control_panel.tick(now) {
+        //     info!("Changed {}", changed);
+        //     ui.tick(changed.into_events().into_iter());
+        // }
+
         if now - last_frame_ms > FPS_MS_PERIOD {
+            // ui.draw(&mut display);
+
             // Text::new(format!("{}FPS", ), Point::new(x, y), character_style)
             TextBox::new(
                 &format!("{}FPS", fps.value().round() as u32),

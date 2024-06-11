@@ -13,7 +13,10 @@ pub mod ui;
 #[macro_use]
 extern crate alloc;
 
-use core::{cell::RefCell, sync::atomic::AtomicUsize};
+use core::{
+    cell::RefCell,
+    sync::atomic::{AtomicU32, AtomicUsize},
+};
 
 use cortex_m::interrupt::Mutex;
 use cortex_m_semihosting::debug;
@@ -62,15 +65,16 @@ pub type Display = ssd1306::Ssd1306<
     ssd1306::prelude::DisplaySize128x32,
     ssd1306::mode::BufferedGraphicsMode<ssd1306::prelude::DisplaySize128x32>,
 >;
-pub static ELAPSED_US: AtomicUsize = AtomicUsize::new(0);
+pub static ELAPSED_MS: AtomicU32 = AtomicU32::new(0);
 
 pub static AUDIO_BUFFER: Mutex<RefCell<heapless::Deque<(i32, i32), AUDIO_BUFFER_SIZE>>> =
     Mutex::new(RefCell::new(heapless::Deque::new()));
 
-pub fn micros() -> usize {
-    ELAPSED_US.load(core::sync::atomic::Ordering::Relaxed)
-}
+// pub fn micros() -> u32 {
+//     ELAPSED_US.load(core::sync::atomic::Ordering::Relaxed)
+// }
 
-pub fn millis() -> usize {
-    micros() / 1_000
+pub fn millis() -> u32 {
+    ELAPSED_MS.load(core::sync::atomic::Ordering::Relaxed)
+    // micros() / 1_000
 }

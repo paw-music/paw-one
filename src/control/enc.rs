@@ -3,9 +3,10 @@ use embedded_hal::digital::v2::InputPin;
 use rotary_encoder_embedded::{
     angular_velocity::AngularVelocityMode, standard::StandardMode, RotaryEncoder,
 };
+use stm32f4xx_hal::gpio::{ExtiPin, PinExt};
 
-const UPDATE_FREQUENCY: u64 = 10;
-const VELOCITY_DEC_FREQUENCY: u64 = 10;
+const UPDATE_FREQUENCY: u32 = 10;
+const VELOCITY_DEC_FREQUENCY: u32 = 10;
 
 #[derive(Clone, Copy, Default, defmt::Format)]
 pub enum EncoderState {
@@ -17,13 +18,13 @@ pub enum EncoderState {
 pub struct Encoder<MODE, DT, CLK> {
     enc: RotaryEncoder<MODE, DT, CLK>,
     state: i32,
-    last_update: u64,
+    last_update: u32,
 }
 
 impl<DT, CLK> Encoder<StandardMode, DT, CLK>
 where
-    DT: InputPin,
-    CLK: InputPin,
+    DT: InputPin + PinExt,
+    CLK: InputPin + ExtiPin,
 {
     pub fn new_standard(dt: DT, clk: CLK) -> Self {
         Self {
@@ -31,6 +32,10 @@ where
             state: 0,
             last_update: 0,
         }
+    }
+
+    pub fn pins_mut(&mut self) -> (&mut DT, &mut CLK) {
+        self.enc.pins_mut()
     }
 
     pub fn tick(&mut self) -> EncoderState {
@@ -81,7 +86,11 @@ where
         }
     }
 
-    pub fn tick(&mut self, now_millis: u64) -> AccelEncoderState {
+    pub fn pins_mut(&mut self) -> (&mut DT, &mut CLK) {
+        self.enc.pins_mut()
+    }
+
+    pub fn tick(&mut self, now_millis: u32) -> AccelEncoderState {
         let elapsed = now_millis - self.last_update;
 
         let mut dec_times = elapsed / VELOCITY_DEC_FREQUENCY;
@@ -90,7 +99,7 @@ where
             dec_times -= 1;
         }
 
-        self.enc.update(now_millis);
+        self.enc.update(now_millis as u64);
 
         match self.enc.direction() {
             rotary_encoder_embedded::Direction::None => {}
