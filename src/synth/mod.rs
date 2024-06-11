@@ -1,8 +1,6 @@
 use paw::audio::{osc::simple_form::SimpleFormSource, source::AudioSourceIter};
 
-use crate::{
-    AUDIO_BUFFER, SAMPLE_RATE,
-};
+use crate::{AUDIO_BUFFER, SAMPLE_RATE};
 
 #[derive(Clone, Copy)]
 pub enum OscKind {
@@ -56,6 +54,11 @@ impl Synth {
             sound, // buffer: Default::default(),
                    // queue: Default::default(),
         }
+    }
+
+    // For test
+    pub fn set_freq(&mut self, freq: f32) {
+        self.sound.set_freq(freq)
     }
 
     // pub fn next_frame(&mut self) -> [u16; 4] {

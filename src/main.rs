@@ -8,7 +8,7 @@ extern crate paw_one;
 
 use core::{cell::RefCell, sync::atomic::AtomicUsize};
 
-use alloc::format;
+use alloc::{format, string::ToString, vec::Vec};
 use cortex_m::interrupt::Mutex;
 use defmt::*;
 use embedded_graphics::{
@@ -21,7 +21,11 @@ use embedded_graphics::{
     Drawable,
 };
 use embedded_text::TextBox;
-use embedded_ui::{col, helpers::select, ui::UI};
+use embedded_ui::{
+    col,
+    helpers::{select, select_keyed, text},
+    ui::UI,
+};
 use micromath::F32Ext;
 use paw_one::{
     control::{btn::PullUp, ControlPanel, ControlsState},
@@ -255,6 +259,48 @@ fn DMA1_STREAM5() {
         warn!("Audio buffer is empty!");
     }
 }
+
+#[derive(Clone, Copy)]
+enum Frequency {
+    A1,
+    A2,
+    A3,
+    A4,
+    A5,
+    A6,
+}
+
+impl Frequency {
+    const ALL: &'static [Frequency] = &[Self::A1, Self::A2, Self::A3, Self::A4, Self::A5, Self::A6];
+
+    fn each() -> impl Iterator<Item = Self> {
+        Self::ALL.iter().copied()
+    }
+
+    fn value(&self) -> f32 {
+        match self {
+            Frequency::A1 => 55.0,
+            Frequency::A2 => 110.0,
+            Frequency::A3 => 220.0,
+            Frequency::A4 => 440.0,
+            Frequency::A5 => 880.0,
+            Frequency::A6 => 1760.0,
+        }
+    }
+}
+
+// impl<
+//         'a,
+//         Message: 'a,
+//         R: Renderer + 'a,
+//         E: embedded_ui::event::Event + 'a,
+//         S: embedded_ui::kit::select::SelectStyler<<R as Renderer>::Color> + 'a,
+//     > Into<SelectOption<'a, Message, R, E, S, Frequency>> for Frequency
+// {
+//     fn into(self) -> SelectOption<'a, Message, R, E, S, Frequency> {
+//         SelectOption::new(self, text("kek").into())
+//     }
+// }
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
@@ -497,12 +543,24 @@ fn main() -> ! {
     }
 
     let mut ui = {
-        let root = col![
-            select(["55", "110", "220", "440", "880", "1760"]).on_change(|new| {
-                info!("Select changed to {}", new);
-                Message::None
-            })
-        ];
+        let root = col![select_keyed(
+            Frequency::each()
+                .map(|freq| (freq.value(), format!("{}Hz", freq.value())))
+                .collect::<Vec<_>>()
+        )
+        .on_change(|new| {
+            cortex_m::interrupt::free(|cs| {
+                SYNTH
+                    .borrow(cs)
+                    .borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .set_freq(*new);
+            });
+
+            info!("Select changed to {}", new);
+            Message::None
+        })];
         let mut ui = UI::new(root, display.bounding_box().size.into()).monochrome();
 
         ui.auto_focus();
