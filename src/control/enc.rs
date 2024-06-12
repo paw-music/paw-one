@@ -8,19 +8,19 @@ const UPDATE_FREQUENCY: u32 = 10;
 const VELOCITY_DEC_FREQUENCY: u32 = 10;
 
 #[derive(Clone, Copy, Default, defmt::Format)]
-pub enum EncoderState {
+pub enum EncState {
     #[default]
     None,
     Changed(i32),
 }
 
-pub struct Encoder<MODE, DT, CLK> {
+pub struct Enc<MODE, DT, CLK> {
     enc: RotaryEncoder<MODE, DT, CLK>,
     state: i32,
     last_update: u32,
 }
 
-impl<DT, CLK> Encoder<StandardMode, DT, CLK>
+impl<DT, CLK> Enc<StandardMode, DT, CLK>
 where
     DT: InputPin,
     CLK: InputPin,
@@ -37,7 +37,11 @@ where
         self.enc.pins_mut()
     }
 
-    pub fn tick(&mut self) -> EncoderState {
+    pub fn tick(&mut self, now_millis: u32) -> EncState {
+        // if now_millis - self.last_update <  {
+        //     return EncoderState::None;
+        // }
+
         self.enc.update();
 
         match self.enc.direction() {
@@ -52,21 +56,22 @@ where
 
         let state = self.state;
         self.state = 0;
+        self.last_update = now_millis;
         match state {
-            0 => EncoderState::None,
-            _ => EncoderState::Changed(state),
+            0 => EncState::None,
+            _ => EncState::Changed(state),
         }
     }
 }
 
 #[derive(Clone, Copy, Default, defmt::Format)]
-pub enum AccelEncoderState {
+pub enum AccelEncState {
     #[default]
     None,
     Changed((i32, f32)),
 }
 
-impl<DT, CLK> Encoder<AngularVelocityMode, DT, CLK>
+impl<DT, CLK> Enc<AngularVelocityMode, DT, CLK>
 where
     DT: InputPin,
     CLK: InputPin,
@@ -89,7 +94,7 @@ where
         self.enc.pins_mut()
     }
 
-    pub fn tick(&mut self, now_millis: u32) -> AccelEncoderState {
+    pub fn tick(&mut self, now_millis: u32) -> AccelEncState {
         let elapsed = now_millis - self.last_update;
 
         let mut dec_times = elapsed / VELOCITY_DEC_FREQUENCY;
@@ -111,7 +116,7 @@ where
         }
 
         if elapsed < UPDATE_FREQUENCY {
-            return AccelEncoderState::None;
+            return AccelEncState::None;
         }
 
         let state = self.state;
@@ -120,22 +125,8 @@ where
         self.last_update = now_millis;
 
         match state {
-            0 => AccelEncoderState::None,
-            _ => AccelEncoderState::Changed((state, self.enc.velocity())),
+            0 => AccelEncState::None,
+            _ => AccelEncState::Changed((state, self.enc.velocity())),
         }
     }
-}
-
-// pub trait EncoderId {}
-
-// pub struct RedEnc;
-// impl EncoderId for RedEnc {}
-
-// pub struct GreenEnc;
-// impl EncoderId for GreenEnc {}
-
-pub trait EditByEncoder {
-    type Meta;
-
-    fn edit_by_encoder(&mut self, offset: i32, vel: f32, meta: Self::Meta) -> &mut Self;
 }

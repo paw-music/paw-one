@@ -23,18 +23,23 @@ use embedded_graphics::{
 use embedded_text::TextBox;
 use embedded_ui::{
     col,
+    event::EventStub,
     helpers::{select, select_keyed, text},
     ui::UI,
 };
 use micromath::F32Ext;
 use paw_one::{
-    control::{btn::PullUp, ControlPanel, ControlsState},
+    control::{
+        btn::{Btn, PullUp},
+        qei_enc::QeiEnc,
+        ControlPanel, ControlsState,
+    },
     display_dma::{DisplayI2cDma, DISPLAY_I2C},
     heap::init_global_heap,
-    millis,
+    micros, millis,
     synth::Synth,
     ui::{fps::FPS, logo::LOGO, Message},
-    DmaAudioBuffer, AUDIO_BUFFER, AUDIO_BUFFER_SIZE, ELAPSED_MS, SAMPLE_RATE,
+    DmaAudioBuffer, AUDIO_BUFFER, AUDIO_BUFFER_SIZE, ELAPSED_MS, ELAPSED_US, SAMPLE_RATE,
 };
 use ssd1306::{mode::DisplayConfig as _, prelude::Brightness};
 use stm32_i2s_v12x::{
@@ -44,8 +49,9 @@ use stm32_i2s_v12x::{
 use stm32f4xx_hal::{
     dma::{config::DmaConfig, DmaFlag, MemoryToPeripheral, Stream5, StreamsTuple, Transfer},
     i2s::I2s3,
-    pac::{DMA1, TIM3},
+    pac::{DMA1, TIM12, TIM2, TIM3, TIM9},
     prelude::*,
+    qei::Qei,
     timer::{CounterHz, Event, Flag},
 };
 use stm32f4xx_hal::{
@@ -63,7 +69,7 @@ use {defmt_rtt as _, panic_probe as _};
 // static I2S_TIMER: Mutex<RefCell<Option<CounterHz<TIM2>>>> = Mutex::new(RefCell::new(None));
 // static UI_TIMER: Mutex<RefCell<Option<CounterHz<TIM4>>>> = Mutex::new(RefCell::new(None));
 // static DISPLAY: Mutex<RefCell<Option<Display>>> = Mutex::new(RefCell::new(None));
-static SYNTH_TIMER: Mutex<RefCell<Option<CounterHz<TIM3>>>> = Mutex::new(RefCell::new(None));
+static SYNTH_TIMER: Mutex<RefCell<Option<CounterHz<TIM12>>>> = Mutex::new(RefCell::new(None));
 static SYNTH: Mutex<RefCell<Option<Synth>>> = Mutex::new(RefCell::new(None));
 // static I2S: Mutex<RefCell<Option<I2sDriver<I2s<SPI3>, Master, Transmit, Philips>>>> =
 //     Mutex::new(RefCell::new(None));
@@ -71,7 +77,7 @@ static SYNTH: Mutex<RefCell<Option<Synth>>> = Mutex::new(RefCell::new(None));
 //     RefCell<Option<I2sTransfer<I2s<SPI3>, Master, Transmit, Philips, Data32Channel32>>>,
 // > = Mutex::new(RefCell::new(None));
 static AUDIO_BUFFER_UNDERRUN_COUNT: AtomicUsize = AtomicUsize::new(0);
-static COMMON_TIMER: Mutex<RefCell<Option<CounterHz<TIM5>>>> = Mutex::new(RefCell::new(None));
+static COMMON_TIMER: Mutex<RefCell<Option<CounterHz<TIM2>>>> = Mutex::new(RefCell::new(None));
 // static CONTROLS_STATE: Mutex<RefCell<Option<ControlsState>>> = Mutex::new(RefCell::new(None));
 // static CONTROL_PANEL: Mutex<
 //     RefCell<
@@ -87,6 +93,14 @@ static COMMON_TIMER: Mutex<RefCell<Option<CounterHz<TIM5>>>> = Mutex::new(RefCel
 //         >,
 //     >,
 // > = Mutex::new(RefCell::new(None));
+const COMMON_TIMER_INC_US: u32 = {
+    const INC: u32 = 2;
+
+    // Must be convertible to millis
+    core::assert!(1_000 % INC == 0);
+
+    INC
+};
 
 type I2sDmaTransfer = Transfer<
     Stream5<DMA1>,
@@ -126,7 +140,7 @@ static I2S_DMA_TRANSFER: Mutex<RefCell<Option<I2sDmaTransfer>>> = Mutex::new(Ref
 // }
 
 #[interrupt]
-fn TIM5() {
+fn TIM2() {
     cortex_m::interrupt::free(|cs| {
         COMMON_TIMER
             .borrow(cs)
@@ -136,7 +150,11 @@ fn TIM5() {
             .clear_flags(Flag::Update);
     });
 
-    ELAPSED_MS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let us = ELAPSED_US.fetch_add(COMMON_TIMER_INC_US, core::sync::atomic::Ordering::Relaxed);
+    if (us + COMMON_TIMER_INC_US) % 1_000 == 0 {
+        ELAPSED_MS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+    // ELAPSED_MS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 }
 
 #[interrupt]
@@ -169,7 +187,7 @@ fn I2C1_ER() {
 // }
 
 #[interrupt]
-fn TIM3() {
+fn TIM12() {
     cortex_m::interrupt::free(|cs| {
         SYNTH_TIMER
             .borrow(cs)
@@ -326,17 +344,6 @@ fn main() -> ! {
 
     let dma1 = StreamsTuple::new(dp.DMA1);
 
-    // let clocks = rcc
-    //     .cfgr
-    //     // .use_hse(8u32.MHz())
-    //     .sysclk(96u32.MHz())
-    //     // .hclk(96u32.MHz())
-    //     .i2s_apb1_clk(61440u32.kHz())
-    //     // .i2s_apb1_clk(61440u32.kHz())
-    //     // .pclk1(48u32.MHz())
-    //     // .pclk2(96u32.MHz())
-    //     .freeze();
-
     let clocks = rcc
         .cfgr
         .use_hse(8.MHz())
@@ -351,12 +358,12 @@ fn main() -> ! {
         unsafe {
             NVIC::unmask(interrupt::DMA1_STREAM1);
             NVIC::unmask(interrupt::I2C1_ER);
-            NVIC::unmask(interrupt::I2C1_EV);
+            // NVIC::unmask(interrupt::I2C1_EV);
         }
 
         let display_i2c = I2c::new(
             dp.I2C1,
-            (gpiob.pb6, gpiob.pb7),
+            (gpiob.pb8, gpiob.pb9),
             i2c::Mode::Fast {
                 frequency: 400u32.kHz(),
                 duty_cycle: i2c::DutyCycle::Ratio2to1,
@@ -373,7 +380,7 @@ fn main() -> ! {
 
         let mut display = ssd1306::Ssd1306::new(
             display_i2c_dma,
-            ssd1306::size::DisplaySize128x32,
+            ssd1306::size::DisplaySize128x64,
             ssd1306::rotation::DisplayRotation::Rotate0,
         )
         .into_buffered_graphics_mode();
@@ -392,27 +399,6 @@ fn main() -> ! {
         display
     };
 
-    // Note: Attempt to reload UI by interrupt
-    // cortex_m::interrupt::free(|cs| {
-    //     *DISPLAY.borrow(cs).borrow_mut() = Some(display);
-    // });
-
-    // {
-    //     let mut ui_timer = dp.TIM4.counter_hz(&clocks);
-    //     ui_timer
-    //         .start(1.Hz())
-    //         .expect("Failed to start UI timer TIM4");
-    //     ui_timer.listen(Event::Update);
-
-    //     cortex_m::interrupt::free(|cs| {
-    //         UI_TIMER.borrow(cs).borrow_mut().replace(ui_timer);
-    //     });
-
-    //     unsafe {
-    //         NVIC::unmask(interrupt::TIM4);
-    //     }
-    // }
-
     let synth = Synth::new();
 
     cortex_m::interrupt::free(|cs| {
@@ -420,10 +406,10 @@ fn main() -> ! {
     });
 
     {
-        let mut synth_timer = dp.TIM3.counter_hz(&clocks);
+        let mut synth_timer = dp.TIM12.counter_hz(&clocks);
         synth_timer
             .start((SAMPLE_RATE * 4).Hz())
-            .expect("Failed to initialize Synth timer TIM3");
+            .expect("Failed to initialize Synth timer TIM12");
         synth_timer.listen(Event::Update);
 
         cortex_m::interrupt::free(|cs| {
@@ -431,50 +417,15 @@ fn main() -> ! {
         });
 
         unsafe {
-            NVIC::unmask(interrupt::TIM3);
+            NVIC::unmask(interrupt::TIM12);
         }
     }
 
-    // {
-    //     let mut i2s_timer = dp.TIM2.counter_hz(&clocks);
-
-    //     i2s_timer
-    //         .start(SAMPLE_RATE.Hz())
-    //         .expect("Failed to start I2S timer TIM2");
-
-    //     i2s_timer.listen(Event::Update);
-
-    //     cortex_m::interrupt::free(|cs| {
-    //         I2S_TIMER.borrow(cs).borrow_mut().replace(i2s_timer);
-    //     });
-
-    //     unsafe {
-    //         // cp.NVIC.set_priority(interrupt::TIM2, 0);
-    //         NVIC::unmask(interrupt::TIM2);
-    //     }
-    // }
-
-    // {
-    //     let mut ui_timer = dp.TIM4.counter_hz(&clocks);
-    //     ui_timer
-    //         .start(50.Hz())
-    //         .expect("Failed to start UI timer TIM4");
-    //     ui_timer.listen(Event::Update);
-
-    //     cortex_m::interrupt::free(|cs| {
-    //         UI_TIMER.borrow(cs).borrow_mut().replace(ui_timer);
-    //     });
-
-    //     unsafe {
-    //         NVIC::unmask(interrupt::TIM4);
-    //     }
-    // }
-
     {
-        let mut common_timer = dp.TIM5.counter_hz(&clocks);
+        let mut common_timer = dp.TIM2.counter_hz(&clocks);
         common_timer
-            .start(1.kHz())
-            .expect("Failed to start common timer TIM5");
+            .start((1_000_000 / COMMON_TIMER_INC_US).Hz())
+            .expect("Failed to start common timer TIM2");
         common_timer.listen(Event::Update);
 
         cortex_m::interrupt::free(|cs| {
@@ -482,12 +433,12 @@ fn main() -> ! {
         });
 
         unsafe {
-            NVIC::unmask(interrupt::TIM5);
+            NVIC::unmask(interrupt::TIM2);
         }
     }
 
     let i2s = {
-        let pins = (gpioa.pa4, gpiob.pb12, gpioc.pc7, gpiob.pb5);
+        let pins = (gpioa.pa4, gpiob.pb12, gpiob.pb10, gpiob.pb5);
         let i2s = I2s::new(dp.SPI3, pins, &clocks);
 
         let i2s_driver_config = I2sDriverConfig::new_master()
@@ -526,9 +477,9 @@ fn main() -> ! {
                 .transfer_complete_interrupt(true)
                 // .fifo_error_interrupt(true)
                 // .half_transfer_interrupt(true)
-                .priority(stm32f4xx_hal::dma::config::Priority::VeryHigh)
-                .transfer_error_interrupt(true)
-                .memory_increment(true),
+                // .transfer_error_interrupt(true)
+                .memory_increment(true)
+                .priority(stm32f4xx_hal::dma::config::Priority::VeryHigh),
         );
 
         i2s_dma_transfer.start(|i2s| i2s.enable());
@@ -561,6 +512,7 @@ fn main() -> ! {
             info!("Select changed to {}", new);
             Message::None
         })];
+
         let mut ui = UI::new(root, display.bounding_box().size.into()).monochrome();
 
         ui.auto_focus();
@@ -569,46 +521,38 @@ fn main() -> ! {
     };
 
     let mut control_panel = {
-        let main_enc = (gpioa.pa0, gpioa.pa1);
-        let main_enc_btn = (gpioa.pa2, PullUp);
-        let red_enc = (gpioa.pa3, gpioa.pa5);
-        let green_enc = (gpioc.pc0, gpioc.pc1);
+        let main_enc = QeiEnc::new(dp.TIM4, (gpiob.pb6, gpiob.pb7)).inverted();
+        let main_enc_btn = Btn::new(gpiob.pb4, PullUp);
+        let red_enc = QeiEnc::new(dp.TIM3, (gpioa.pa6, gpioa.pa7));
+        let green_enc = QeiEnc::new(dp.TIM8, (gpioc.pc6, gpioc.pc7));
 
         ControlPanel::new(main_enc, main_enc_btn, red_enc, green_enc)
     };
 
-    // cortex_m::interrupt::free(|cs| {
-    //     *CONTROL_PANEL.borrow(cs).borrow_mut() = Some(control_panel);
-    // });
-
-    // cortex_m::interrupt::free(|cs| {
-    //     CONTROL_PANEL
-    //         .borrow(cs)
-    //         .borrow_mut()
-    //         .as_mut()
-    //         .unwrap()
-    //         .configure_interrupts(&mut syscfg, &mut dp.EXTI);
-    // });
-
     let mut last_frame_ms = millis();
+    let mut last_controls_update_us = micros();
 
-    const FIXED_FPS: u32 = 25;
+    const FIXED_FPS: u32 = 12;
     const FPS_MS_PERIOD: u32 = 1_000 / FIXED_FPS;
+
+    const CONTROLS_UPDATE_PERIOD_US: u32 = 500;
 
     let mut fps = FPS::new();
 
     info!("Starting main loop...");
     loop {
-        let now = millis();
+        let now_us = micros();
+        let now_ms = millis();
 
-        // synth.tick();
-
-        if let ControlsState::Changed(changed) = control_panel.tick(now) {
-            info!("Changed {}", changed);
-            ui.tick(changed.into_events().into_iter());
+        if now_us - last_controls_update_us > CONTROLS_UPDATE_PERIOD_US {
+            if let ControlsState::Changed(changed) = control_panel.tick(now_ms) {
+                // info!("Changed {}", changed);
+                ui.tick(changed.into_events().into_iter());
+            }
+            last_controls_update_us = now_us;
         }
 
-        if now - last_frame_ms > FPS_MS_PERIOD {
+        if now_ms - last_frame_ms > FPS_MS_PERIOD {
             ui.draw(&mut display);
 
             // Text::new(format!("{}FPS", ), Point::new(x, y), character_style)
@@ -641,7 +585,7 @@ fn main() -> ! {
 
             display.flush().unwrap();
 
-            last_frame_ms = now;
+            last_frame_ms = now_ms;
         }
 
         // if main_timer

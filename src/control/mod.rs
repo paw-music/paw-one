@@ -1,28 +1,30 @@
 use alloc::vec::Vec;
-use btn::{Btn, BtnState, PullEdge};
-use embedded_hal::digital::v2::InputPin;
+use btn::{AnyBtn, Btn, BtnState, PullEdge};
+use embedded_hal::{digital::v2::InputPin, Qei};
+use qei_enc::{QeiEnc, QeiEncTimExt};
 use rotary_encoder_embedded::{angular_velocity::AngularVelocityMode, standard::StandardMode};
 
 use crate::ui::Event;
 
-use self::enc::{AccelEncoderState, Encoder, EncoderState};
+use self::enc::EncState;
 
 pub mod btn;
 pub mod enc;
+pub mod qei_enc;
 
 #[derive(defmt::Format)]
 pub struct ControlsStateChanged {
-    pub main_enc: EncoderState,
+    pub main_enc: EncState,
     pub main_enc_btn: BtnState,
-    pub red_enc: AccelEncoderState,
-    pub green_enc: AccelEncoderState,
+    pub red_enc: EncState,
+    pub green_enc: EncState,
 }
 
 impl ControlsStateChanged {
     pub fn into_events(self) -> Vec<Event> {
         let mut events = vec![];
 
-        if let EncoderState::Changed(main_enc) = self.main_enc {
+        if let EncState::Changed(main_enc) = self.main_enc {
             events.push(Event::MainEncChange(main_enc, 1.0));
         }
 
@@ -47,10 +49,10 @@ pub enum ControlsState {
 
 #[derive(Default)]
 pub struct ControlsStateBuilder {
-    main_enc: EncoderState,
+    main_enc: EncState,
     main_enc_btn: BtnState,
-    red_enc: AccelEncoderState,
-    green_enc: AccelEncoderState,
+    red_enc: EncState,
+    green_enc: EncState,
 }
 
 impl ControlsStateBuilder {
@@ -61,12 +63,7 @@ impl ControlsStateBuilder {
             self.red_enc,
             self.green_enc,
         ) {
-            (
-                EncoderState::None,
-                BtnState::None,
-                AccelEncoderState::None,
-                AccelEncoderState::None,
-            ) => ControlsState::None,
+            (EncState::None, BtnState::None, EncState::None, EncState::None) => ControlsState::None,
             _ => ControlsState::Changed(ControlsStateChanged {
                 main_enc: self.main_enc,
                 main_enc_btn: self.main_enc_btn,
@@ -77,71 +74,38 @@ impl ControlsStateBuilder {
     }
 }
 
-// pub trait ControlPanelPins {
-//     type MainEncDt: InputPin;
-//     type MainEncClk: InputPin;
-
-//     type RedEncDt: InputPin;
-//     type RedEncClk: InputPin;
-
-//     type GreenEncDt: InputPin;
-//     type GreenEncClk: InputPin;
-// }
-
 pub struct ControlPanel<
-    MainEncDt: InputPin,
-    MainEncClk: InputPin,
-    MainEncBtn: InputPin,
-    MainEncBtnPull: PullEdge,
-    RedEncDt: InputPin,
-    RedEncClk: InputPin,
-    GreenEncDt: InputPin,
-    GreenEncClk: InputPin,
+    MainEnc: QeiEncTimExt,
+    MainEncBtn: AnyBtn,
+    RedEnc: QeiEncTimExt,
+    GreenEnc: QeiEncTimExt,
 > {
-    main_enc: Encoder<StandardMode, MainEncDt, MainEncClk>,
-    main_enc_btn: Btn<MainEncBtn, MainEncBtnPull>,
-    red_enc: Encoder<AngularVelocityMode, RedEncDt, RedEncClk>,
-    green_enc: Encoder<AngularVelocityMode, GreenEncDt, GreenEncClk>,
+    main_enc: QeiEnc<MainEnc>,
+    main_enc_btn: MainEncBtn,
+    red_enc: QeiEnc<RedEnc>,
+    green_enc: QeiEnc<GreenEnc>,
 }
 
-impl<
-        MainEncDt: InputPin,
-        MainEncClk: InputPin,
-        MainEncBtn: InputPin,
-        MainEncBtnPull: PullEdge,
-        RedEncDt: InputPin,
-        RedEncClk: InputPin,
-        GreenEncDt: InputPin,
-        GreenEncClk: InputPin,
-    >
-    ControlPanel<
-        MainEncDt,
-        MainEncClk,
-        MainEncBtn,
-        MainEncBtnPull,
-        RedEncDt,
-        RedEncClk,
-        GreenEncDt,
-        GreenEncClk,
-    >
+impl<MainEnc: QeiEncTimExt, MainEncBtn: AnyBtn, RedEnc: QeiEncTimExt, GreenEnc: QeiEncTimExt>
+    ControlPanel<MainEnc, MainEncBtn, RedEnc, GreenEnc>
 {
     pub fn new(
-        main_enc: (MainEncDt, MainEncClk),
-        main_enc_btn: (MainEncBtn, MainEncBtnPull),
-        red_enc: (RedEncDt, RedEncClk),
-        green_enc: (GreenEncDt, GreenEncClk),
+        main_enc: QeiEnc<MainEnc>,
+        main_enc_btn: MainEncBtn,
+        red_enc: QeiEnc<RedEnc>,
+        green_enc: QeiEnc<GreenEnc>,
     ) -> Self {
         Self {
-            main_enc: Encoder::new_standard(main_enc.0, main_enc.1),
-            main_enc_btn: Btn::new(main_enc_btn.0, main_enc_btn.1),
-            red_enc: Encoder::new(red_enc.0, red_enc.1),
-            green_enc: Encoder::new(green_enc.0, green_enc.1),
+            main_enc,
+            main_enc_btn,
+            red_enc,
+            green_enc,
         }
     }
 
     pub fn tick(&mut self, now_millis: u32) -> ControlsState {
         ControlsStateBuilder {
-            main_enc: self.main_enc.tick(),
+            main_enc: self.main_enc.tick(now_millis),
             main_enc_btn: self.main_enc_btn.tick(),
             red_enc: self.red_enc.tick(now_millis),
             green_enc: self.green_enc.tick(now_millis),

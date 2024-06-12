@@ -1,5 +1,4 @@
-
-use debouncr::debounce_4;
+use debouncr::debounce_2;
 use embedded_hal::digital::v2::InputPin;
 
 #[derive(Clone, Copy, Debug, Default, defmt::Format)]
@@ -37,7 +36,7 @@ impl PullEdge for PullDown {
 
 pub struct Btn<P: InputPin, Pull: PullEdge> {
     pin: P,
-    debouncer: debouncr::Debouncer<u8, debouncr::Repeat4>,
+    debouncer: debouncr::Debouncer<u8, debouncr::Repeat2>,
     pull: Pull,
 }
 
@@ -45,12 +44,18 @@ impl<P: InputPin, Pull: PullEdge> Btn<P, Pull> {
     pub fn new(pin: P, pull: Pull) -> Self {
         Self {
             pin,
-            debouncer: debounce_4(false),
+            debouncer: debounce_2(false),
             pull,
         }
     }
+}
 
-    pub fn tick(&mut self) -> BtnState {
+pub trait AnyBtn {
+    fn tick(&mut self) -> BtnState;
+}
+
+impl<P: InputPin, Pull: PullEdge> AnyBtn for Btn<P, Pull> {
+    fn tick(&mut self) -> BtnState {
         match self.debouncer.update(self.pin.is_high().ok().unwrap()) {
             Some(edge) => self.pull.to_state(edge),
             None => BtnState::None,
