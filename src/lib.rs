@@ -9,6 +9,7 @@ pub mod heap;
 pub mod i2s;
 pub mod synth;
 pub mod ui;
+pub mod midi;
 
 #[macro_use]
 extern crate alloc;

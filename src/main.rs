@@ -49,6 +49,7 @@ use stm32_i2s_v12x::{
 use stm32f4xx_hal::{
     dma::{config::DmaConfig, DmaFlag, MemoryToPeripheral, Stream5, StreamsTuple, Transfer},
     i2s::I2s3,
+    otg_fs::{UsbBus, USB},
     pac::{DMA1, TIM12, TIM2, TIM3, TIM9},
     prelude::*,
     qei::Qei,
@@ -63,6 +64,14 @@ use stm32f4xx_hal::{
     prelude::_fugit_RateExtU32,
     rcc::RccExt,
     timer::TimerExt,
+};
+use usb_device::{
+    device::{StringDescriptors, UsbDeviceBuilder, UsbVidPid},
+    LangID,
+};
+use usbd_midi::{
+    data::{midi::notes::Note, usb_midi::midi_packet_reader::MidiPacketBufferReader},
+    midi_device::MidiClass,
 };
 use {defmt_rtt as _, panic_probe as _};
 
@@ -307,6 +316,16 @@ impl Frequency {
     }
 }
 
+trait NoteFrequency {
+    fn freq(&self) -> f32;
+}
+
+impl NoteFrequency for Note {
+    fn freq(&self) -> f32 {
+        440.0 * 2f32.powf((Into::<u8>::into(*self) as f32 - 69.0) / 12.0)
+    }
+}
+
 // impl<
 //         'a,
 //         Message: 'a,
@@ -493,6 +512,25 @@ fn main() -> ! {
         }
     }
 
+    let ep_memory = cortex_m::singleton!(: [u32; 1024] = [0; 1024]).unwrap();
+    let usb = USB::new(
+        (dp.OTG_FS_GLOBAL, dp.OTG_FS_DEVICE, dp.OTG_FS_PWRCLK),
+        (gpioa.pa11, gpioa.pa12),
+        &clocks,
+    );
+    let usb_bus = UsbBus::new(usb, ep_memory);
+    let mut midi = MidiClass::new(&usb_bus, 1, 1).unwrap();
+    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x5e4))
+        .device_class(0)
+        // .device_sub_class(0)
+        .self_powered(true)
+        .strings(&[StringDescriptors::default()
+            .manufacturer("hazer-hazer")
+            .product("PAW1")
+            .serial_number("TEST")])
+        .unwrap()
+        .build();
+
     let mut ui = {
         let root = col![select_keyed(
             Frequency::each()
@@ -509,7 +547,6 @@ fn main() -> ! {
                     .set_freq(*new);
             });
 
-            info!("Select changed to {}", new);
             Message::None
         })];
 
@@ -543,6 +580,49 @@ fn main() -> ! {
     loop {
         let now_us = micros();
         let now_ms = millis();
+
+        if usb_dev.poll(&mut [&mut midi]) {
+            let mut buffer = [0; 64];
+
+            if let Ok(size) = midi.read(&mut buffer) {
+                let buffer_reader = MidiPacketBufferReader::new(&buffer, size);
+                for packet in buffer_reader.into_iter() {
+                    if let Ok(packet) = packet {
+                        match packet.message {
+                            usbd_midi::data::midi::message::Message::NoteOff(_, note, _) => {
+                                cortex_m::interrupt::free(|cs| {
+                                    SYNTH
+                                        .borrow(cs)
+                                        .borrow_mut()
+                                        .as_mut()
+                                        .unwrap()
+                                        .set_freq(note.freq())
+                                });
+                            }
+                            usbd_midi::data::midi::message::Message::NoteOn(_, note, _) => {
+                                // cortex_m::interrupt::free(|cs| {
+                                //     SYNTH
+                                //         .borrow(cs)
+                                //         .borrow_mut()
+                                //         .as_mut()
+                                //         .unwrap()
+                                //         .set_freq(0.0)
+                                // });
+                            }
+                            // usbd_midi::data::midi::message::Message::PolyphonicAftertouch(_, _, _) => todo!(),
+                            // usbd_midi::data::midi::message::Message::ProgramChange(_, _) => todo!(),
+                            // usbd_midi::data::midi::message::Message::ChannelAftertouch(_, _) => todo!(),
+                            // usbd_midi::data::midi::message::Message::PitchWheelChange(_, _, _) => todo!(),
+                            // usbd_midi::data::midi::message::Message::ControlChange(_, _, _) => todo!(),
+                            _ => info!(
+                                "Unsupported message: {}",
+                                format!("{:?}", packet.message).as_str()
+                            ),
+                        }
+                    }
+                }
+            }
+        }
 
         if now_us - last_controls_update_us > CONTROLS_UPDATE_PERIOD_US {
             if let ControlsState::Changed(changed) = control_panel.tick(now_ms) {

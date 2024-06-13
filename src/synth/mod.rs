@@ -1,3 +1,5 @@
+pub mod wavetable;
+
 use paw::audio::{osc::simple_form::SimpleFormSource, source::AudioSourceIter};
 
 use crate::{AUDIO_BUFFER, SAMPLE_RATE};

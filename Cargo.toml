@@ -110,10 +110,12 @@ stm32_i2s_v12x = "0.5.1"
 nb = { version = "1.1.0", features = ["defmt-0-3"] }
 panic-halt = "0.2.0"
 debouncr = "0.2.2"
+usbd-midi = "0.3.0"
+usb-device = "0.3.2"
 
 [dependencies.stm32f4xx-hal]
 version = "0.21.0"
-features = ["stm32f412", "i2s", "defmt"]
+features = ["stm32f412", "i2s", "defmt", "usb_fs"]
 
 [profile.dev]
 opt-level = 3
