@@ -7,9 +7,10 @@ pub mod control;
 pub mod display_dma;
 pub mod heap;
 pub mod i2s;
+pub mod midi;
 pub mod synth;
 pub mod ui;
-pub mod midi;
+pub mod drivers;
 
 #[macro_use]
 extern crate alloc;
@@ -26,7 +27,8 @@ use stm32_i2s_v12x::{
     marker::{Data32Channel32, Master, Philips, Transmit},
     transfer::I2sTransfer,
 };
-use stm32f4xx_hal::i2s::I2s3;
+use stm32f4xx_hal::{i2s::I2s3, otg_fs::{UsbBus, USB}};
+use usb_device::bus::UsbBusAllocator;
 
 #[inline(never)]
 #[defmt::panic_handler]
@@ -53,8 +55,10 @@ pub mod board_info {
     pub const DISPLAY_SIZE: Size = Size::new(128, 32);
 }
 
+pub type Global<T> = Mutex<RefCell<Option<T>>>;
+
 pub const SAMPLE_RATE: u32 = 48_000;
-pub const AUDIO_BUFFER_SIZE: usize = 1024;
+pub const AUDIO_BUFFER_SIZE: usize = 256;
 pub const DMA_AUDIO_BUFFER_SIZE: usize = AUDIO_BUFFER_SIZE * 2 * 2;
 pub type DmaAudioBuffer = [u16; DMA_AUDIO_BUFFER_SIZE];
 pub type MainI2s = I2sTransfer<I2s3, Master, Transmit, Philips, Data32Channel32>;
@@ -65,6 +69,7 @@ pub type Display = ssd1306::Ssd1306<
 >;
 pub static ELAPSED_US: AtomicU32 = AtomicU32::new(0);
 pub static ELAPSED_MS: AtomicU32 = AtomicU32::new(0);
+// pub static USB_BUS: Global<UsbBusAllocator<UsbBus<USB>>> = Mutex::new(RefCell::new(None));
 
 pub static AUDIO_BUFFER: Mutex<RefCell<heapless::Deque<(i32, i32), AUDIO_BUFFER_SIZE>>> =
     Mutex::new(RefCell::new(heapless::Deque::new()));

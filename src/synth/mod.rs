@@ -1,6 +1,9 @@
 pub mod wavetable;
 
+use defmt::debug;
+use micromath::F32Ext;
 use paw::audio::{osc::simple_form::SimpleFormSource, source::AudioSourceIter};
+use usbd_midi::data::midi::notes::Note;
 
 use crate::{AUDIO_BUFFER, SAMPLE_RATE};
 
@@ -33,93 +36,99 @@ impl core::fmt::Display for OscName {
     }
 }
 
+trait NoteFrequency {
+    fn freq(&self) -> f32;
+}
+
+impl NoteFrequency for Note {
+    fn freq(&self) -> f32 {
+        440.0 * 2f32.powf((Into::<u8>::into(*self) as f32 - 69.0) / 12.0)
+    }
+}
+
 pub struct Osc {
     pub kind: OscKind,
     pub name: OscName,
 }
 
-pub struct Synth {
-    // pub oscs: [Osc; 3],
+pub struct Voice {
     sound: SimpleFormSource,
-    // queue: heapless::Deque<(i32, i32), AUDIO_BUFFER_SIZE>,
+    note: Option<Note>,
+}
+
+impl Voice {
+    pub fn note_on(&mut self, note: Note) {
+        self.sound.set_freq(note.freq());
+        self.note = Some(note);
+    }
+
+    pub fn note_off(&mut self) {
+        self.note = None;
+    }
+
+    pub fn next_sample(&mut self) -> Option<f32> {
+        if let Some(_) = self.note {
+            Some(self.sound.next_sample() * 0.4)
+        } else {
+            None
+        }
+    }
+}
+
+impl Default for Voice {
+    fn default() -> Self {
+        let sound = SimpleFormSource::infinite_mono(
+            SAMPLE_RATE,
+            paw::audio::osc::simple_form::WaveForm::Sine,
+            0.0,
+        );
+
+        Self { sound, note: None }
+    }
+}
+
+pub struct Synth {
+    voices: [Voice; 16],
 }
 
 impl Synth {
     pub fn new() -> Self {
-        let sound = SimpleFormSource::infinite_mono(
-            SAMPLE_RATE,
-            paw::audio::osc::simple_form::WaveForm::Sine,
-            220.0,
-        );
-
         Self {
-            sound, // buffer: Default::default(),
-                   // queue: Default::default(),
+            voices: Default::default(),
+            // buffer: Default::default(),
+            // queue: Default::default(),
         }
     }
 
-    // For test
-    pub fn set_freq(&mut self, freq: f32) {
-        self.sound.set_freq(freq)
+    pub fn note_on(&mut self, note: Note) {
+        debug!("Note on {}", format!("{:?}", note).as_str());
+        if let Some(free_voice) = self.voices.iter_mut().find(|voice| voice.note.is_none()) {
+            free_voice.note_on(note);
+        }
     }
 
-    // pub fn next_frame(&mut self) -> [u16; 4] {
-    //     let sample = (self.sound.next_sample() * 0.4 * i32::MAX as f32) as i32;
-    //     let bytes = sample.to_be_bytes();
-
-    //     let mut frame = [0; 4];
-    //     frame[0] = u16::from_be_bytes([bytes[0], bytes[1]]);
-    //     frame[1] = frame[0];
-    //     frame[2] = u16::from_be_bytes([bytes[2], bytes[3]]);
-    //     frame[3] = frame[2];
-
-    //     frame
-    // }
-
-    // pub fn next_frame(&mut self) -> (i32, i32) {
-    //     let sample = (self.sound.next_sample() * 0.4 * i32::MAX as f32) as i32;
-    //     (sample, sample)
-    // }
-
-    // pub fn take_buffer(&mut self) -> &'static mut DmaAudioBuffer {
-    //     let buffer = cortex_m::singleton!(: DmaAudioBuffer = [0; DMA_AUDIO_BUFFER_SIZE]).unwrap();
-
-    //     let mut pointer = 0;
-    //     while let Some(frame) = self.queue.pop_front() {
-    //         let mut data = [0; 4];
-    //         let left = frame.0.to_be_bytes();
-    //         let right = frame.1.to_be_bytes();
-
-    //         data[0..2].copy_from_slice(&[
-    //             u16::from_be_bytes([left[0], left[1]]),
-    //             u16::from_be_bytes([left[2], left[3]]),
-    //         ]);
-
-    //         data[2..4].copy_from_slice(&[
-    //             u16::from_be_bytes([right[0], right[1]]),
-    //             u16::from_be_bytes([right[2], right[3]]),
-    //         ]);
-
-    //         buffer[pointer..pointer + 4].copy_from_slice(&data);
-    //         pointer += 4;
-    //     }
-
-    //     if pointer < buffer.len() {
-    //         panic!("Underrun");
-    //     }
-
-    //     buffer
-    // }
-
-    // pub fn buffer(&mut self, next: &mut DmaAudioBuffer) -> &DmaAudioBuffer {
-    //     self.
-    // }
+    pub fn note_off(&mut self, note: Note) {
+        debug!("Note off {}", format!("{:?}", note).as_str());
+        if let Some(note_voice) = self
+            .voices
+            .iter_mut()
+            .find(|voice| voice.note == Some(note))
+        {
+            note_voice.note_off();
+        }
+    }
 
     pub fn tick(&mut self) {
+        let voices_sample: f32 = self
+            .voices
+            .iter_mut()
+            .filter_map(|voice| voice.next_sample())
+            .sum();
+
         cortex_m::interrupt::free(|cs| {
             let mut buffer = AUDIO_BUFFER.borrow(cs).borrow_mut();
             if !buffer.is_full() {
-                let sample = (self.sound.next_sample() * 0.4 * i32::MAX as f32) as i32;
+                let sample = (voices_sample * i32::MAX as f32) as i32;
                 buffer.push_back((sample, sample)).ok();
             } else {
                 // info!("Buffer is full!");

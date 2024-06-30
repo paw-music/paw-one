@@ -11,6 +11,7 @@ use self::enc::EncState;
 pub mod btn;
 pub mod enc;
 pub mod qei_enc;
+pub mod keys;
 
 #[derive(defmt::Format)]
 pub struct ControlsStateChanged {

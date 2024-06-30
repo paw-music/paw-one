@@ -31,15 +31,20 @@ use micromath::F32Ext;
 use paw_one::{
     control::{
         btn::{Btn, PullUp},
+        keys::Keys,
         qei_enc::QeiEnc,
         ControlPanel, ControlsState,
     },
     display_dma::{DisplayI2cDma, DISPLAY_I2C},
+    drivers::ttp229::TTP229,
     heap::init_global_heap,
-    micros, millis,
+    micros,
+    midi::UsbMidi,
+    millis,
     synth::Synth,
     ui::{fps::FPS, logo::LOGO, Message},
-    DmaAudioBuffer, AUDIO_BUFFER, AUDIO_BUFFER_SIZE, ELAPSED_MS, ELAPSED_US, SAMPLE_RATE,
+    DmaAudioBuffer, Global, AUDIO_BUFFER, AUDIO_BUFFER_SIZE, DMA_AUDIO_BUFFER_SIZE, ELAPSED_MS,
+    ELAPSED_US, SAMPLE_RATE,
 };
 use ssd1306::{mode::DisplayConfig as _, prelude::Brightness};
 use stm32_i2s_v12x::{
@@ -47,9 +52,11 @@ use stm32_i2s_v12x::{
     marker::{Master, Philips, Transmit},
 };
 use stm32f4xx_hal::{
-    dma::{config::DmaConfig, DmaFlag, MemoryToPeripheral, Stream5, StreamsTuple, Transfer},
-    i2s::I2s3,
-    otg_fs::{UsbBus, USB},
+    dma::{
+        config::DmaConfig, DmaFlag, MemoryToPeripheral, Stream4, Stream5, StreamsTuple, Transfer,
+    },
+    i2s::{I2s2, I2s3},
+    otg_fs::{UsbBus, UsbBusType, USB},
     pac::{DMA1, TIM12, TIM2, TIM3, TIM9},
     prelude::*,
     qei::Qei,
@@ -66,11 +73,16 @@ use stm32f4xx_hal::{
     timer::TimerExt,
 };
 use usb_device::{
+    bus::UsbBusAllocator,
     device::{StringDescriptors, UsbDeviceBuilder, UsbVidPid},
     LangID,
 };
 use usbd_midi::{
-    data::{midi::notes::Note, usb_midi::midi_packet_reader::MidiPacketBufferReader},
+    data::{
+        midi::notes::Note,
+        usb::constants::{USB_AUDIO_CLASS, USB_MIDISTREAMING_SUBCLASS},
+        usb_midi::midi_packet_reader::MidiPacketBufferReader,
+    },
     midi_device::MidiClass,
 };
 use {defmt_rtt as _, panic_probe as _};
@@ -78,15 +90,16 @@ use {defmt_rtt as _, panic_probe as _};
 // static I2S_TIMER: Mutex<RefCell<Option<CounterHz<TIM2>>>> = Mutex::new(RefCell::new(None));
 // static UI_TIMER: Mutex<RefCell<Option<CounterHz<TIM4>>>> = Mutex::new(RefCell::new(None));
 // static DISPLAY: Mutex<RefCell<Option<Display>>> = Mutex::new(RefCell::new(None));
-static SYNTH_TIMER: Mutex<RefCell<Option<CounterHz<TIM12>>>> = Mutex::new(RefCell::new(None));
-static SYNTH: Mutex<RefCell<Option<Synth>>> = Mutex::new(RefCell::new(None));
+static SYNTH_TIMER: Global<CounterHz<TIM12>> = Mutex::new(RefCell::new(None));
+static SYNTH: Global<Synth> = Mutex::new(RefCell::new(None));
 // static I2S: Mutex<RefCell<Option<I2sDriver<I2s<SPI3>, Master, Transmit, Philips>>>> =
 //     Mutex::new(RefCell::new(None));
 // static I2S: Mutex<
 //     RefCell<Option<I2sTransfer<I2s<SPI3>, Master, Transmit, Philips, Data32Channel32>>>,
 // > = Mutex::new(RefCell::new(None));
 static AUDIO_BUFFER_UNDERRUN_COUNT: AtomicUsize = AtomicUsize::new(0);
-static COMMON_TIMER: Mutex<RefCell<Option<CounterHz<TIM2>>>> = Mutex::new(RefCell::new(None));
+static COMMON_TIMER: Global<CounterHz<TIM2>> = Mutex::new(RefCell::new(None));
+static USB_MIDI: Global<UsbMidi> = Mutex::new(RefCell::new(None));
 // static CONTROLS_STATE: Mutex<RefCell<Option<ControlsState>>> = Mutex::new(RefCell::new(None));
 // static CONTROL_PANEL: Mutex<
 //     RefCell<
@@ -112,13 +125,13 @@ const COMMON_TIMER_INC_US: u32 = {
 };
 
 type I2sDmaTransfer = Transfer<
-    Stream5<DMA1>,
+    Stream4<DMA1>,
     0,
-    I2sDriver<I2s3, Master, Transmit, Philips>,
+    I2sDriver<I2s2, Master, Transmit, Philips>,
     MemoryToPeripheral,
     &'static mut DmaAudioBuffer,
 >;
-static I2S_DMA_TRANSFER: Mutex<RefCell<Option<I2sDmaTransfer>>> = Mutex::new(RefCell::new(None));
+static I2S_DMA_TRANSFER: Global<I2sDmaTransfer> = Mutex::new(RefCell::new(None));
 
 // #[interrupt]
 // fn TIM2() {
@@ -276,6 +289,7 @@ fn DMA1_STREAM5() {
             }
         });
     }
+
     if flags.is_fifo_error() {
         warn!("I2S DMA Stream FIFO Error!");
     }
@@ -287,43 +301,48 @@ fn DMA1_STREAM5() {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Frequency {
-    A1,
-    A2,
-    A3,
-    A4,
-    A5,
-    A6,
-}
-
-impl Frequency {
-    const ALL: &'static [Frequency] = &[Self::A1, Self::A2, Self::A3, Self::A4, Self::A5, Self::A6];
-
-    fn each() -> impl Iterator<Item = Self> {
-        Self::ALL.iter().copied()
-    }
-
-    fn value(&self) -> f32 {
-        match self {
-            Frequency::A1 => 55.0,
-            Frequency::A2 => 110.0,
-            Frequency::A3 => 220.0,
-            Frequency::A4 => 440.0,
-            Frequency::A5 => 880.0,
-            Frequency::A6 => 1760.0,
-        }
-    }
-}
-
-trait NoteFrequency {
-    fn freq(&self) -> f32;
-}
-
-impl NoteFrequency for Note {
-    fn freq(&self) -> f32 {
-        440.0 * 2f32.powf((Into::<u8>::into(*self) as f32 - 69.0) / 12.0)
-    }
+#[interrupt]
+fn OTG_FS() {
+    cortex_m::interrupt::free(|cs| {
+        USB_MIDI
+            .borrow(cs)
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .poll(|packet| {
+                match packet.message {
+                    usbd_midi::data::midi::message::Message::NoteOff(_, note, _) => {
+                        cortex_m::interrupt::free(|cs| {
+                            SYNTH
+                                .borrow(cs)
+                                .borrow_mut()
+                                .as_mut()
+                                .unwrap()
+                                .note_on(note)
+                        });
+                    }
+                    usbd_midi::data::midi::message::Message::NoteOn(_, note, _) => {
+                        cortex_m::interrupt::free(|cs| {
+                            SYNTH
+                                .borrow(cs)
+                                .borrow_mut()
+                                .as_mut()
+                                .unwrap()
+                                .note_off(note)
+                        });
+                    }
+                    // usbd_midi::data::midi::message::Message::PolyphonicAftertouch(_, _, _) => todo!(),
+                    // usbd_midi::data::midi::message::Message::ProgramChange(_, _) => todo!(),
+                    // usbd_midi::data::midi::message::Message::ChannelAftertouch(_, _) => todo!(),
+                    // usbd_midi::data::midi::message::Message::PitchWheelChange(_, _, _) => todo!(),
+                    // usbd_midi::data::midi::message::Message::ControlChange(_, _, _) => todo!(),
+                    _ => info!(
+                        "Unsupported message: {}",
+                        format!("{:?}", packet.message).as_str()
+                    ),
+                }
+            });
+    });
 }
 
 // impl<
@@ -418,6 +437,62 @@ fn main() -> ! {
         display
     };
 
+    // let mut keys = {
+    //     let i2c = I2c::new(
+    //         dp.I2C2,
+    //         (
+    //             gpiob.pb10.into_alternate_open_drain(),
+    //             gpiob.pb3.into_alternate_open_drain(),
+    //         ),
+    //         i2c::Mode::Fast {
+    //             frequency: 400.kHz(),
+    //             duty_cycle: i2c::DutyCycle::Ratio2to1,
+    //         },
+    //         &clocks,
+    //     );
+    // };
+
+    let mut keys = {
+        // unsafe {
+        //     NVIC::unmask(interrupt::I2C2_ER);
+        // }
+
+        let i2c = I2c::new(
+            dp.I2C2,
+            (
+                gpiob.pb10.into_alternate_open_drain(),
+                gpiob.pb3.into_alternate_open_drain(),
+            ),
+            i2c::Mode::Fast {
+                frequency: 400.kHz(),
+                duty_cycle: i2c::DutyCycle::Ratio2to1,
+            },
+            &clocks,
+        );
+
+        let mut mpr121 =
+            mpr121_hal::Mpr121::new(i2c, mpr121_hal::Mpr121Address::Default, true, true)
+                .expect("MPR121 Initialization error");
+
+        // mpr121.set_thresholds(6, 6);
+
+        info!("MPR121 Keys initialized successfully");
+
+        mpr121
+    };
+
+    let mut keys_ttp229 = {
+        let ttp229 = TTP229::new((
+            gpioc
+                .pc10
+                .into_push_pull_output()
+                .speed(stm32f4xx_hal::gpio::Speed::High),
+            gpioc.pc11.into_input(),
+        ));
+
+        ttp229
+    };
+
     let synth = Synth::new();
 
     cortex_m::interrupt::free(|cs| {
@@ -456,36 +531,36 @@ fn main() -> ! {
         }
     }
 
-    let i2s = {
-        let pins = (gpioa.pa4, gpiob.pb12, gpiob.pb10, gpiob.pb5);
-        let i2s = I2s::new(dp.SPI3, pins, &clocks);
-
-        let i2s_driver_config = I2sDriverConfig::new_master()
-            .transmit()
-            .data_format(stm32_i2s_v12x::driver::DataFormat::Data32Channel32)
-            .require_frequency(SAMPLE_RATE)
-            .master_clock(true)
-            .standard(Philips);
-        let mut i2s_driver = I2sDriver::new(i2s, i2s_driver_config);
-
-        i2s_driver.set_tx_dma(true);
-        i2s_driver.set_tx_interrupt(true);
-
-        i2s_driver
-    };
-
     {
-        let dma1ch5 = dma1.5;
+        let i2s = {
+            let pins = (gpiob.pb12, gpiob.pb13, gpioa.pa3, gpioc.pc3);
+            let i2s = I2s::new(dp.SPI2, pins, &clocks);
+
+            let i2s_driver_config = I2sDriverConfig::new_master()
+                .transmit()
+                .data_format(stm32_i2s_v12x::driver::DataFormat::Data32Channel32)
+                .require_frequency(SAMPLE_RATE)
+                .master_clock(true)
+                .standard(Philips);
+            let mut i2s_driver = I2sDriver::new(i2s, i2s_driver_config);
+
+            i2s_driver.set_tx_dma(true);
+            i2s_driver.set_tx_interrupt(true);
+
+            i2s_driver
+        };
+
+        let dma1ch4 = dma1.4;
 
         let i2s_buf1 =
-        cortex_m::singleton!(: [u16; AUDIO_BUFFER_SIZE * 2 * 2] = [0; AUDIO_BUFFER_SIZE * 2 * 2])
-            .unwrap();
+            cortex_m::singleton!(: [u16; DMA_AUDIO_BUFFER_SIZE] = [0; DMA_AUDIO_BUFFER_SIZE])
+                .unwrap();
         let i2s_buf2 =
-        cortex_m::singleton!(: [u16; AUDIO_BUFFER_SIZE * 2 * 2] = [0; AUDIO_BUFFER_SIZE * 2 * 2])
-            .unwrap();
+            cortex_m::singleton!(: [u16; DMA_AUDIO_BUFFER_SIZE] = [0; DMA_AUDIO_BUFFER_SIZE])
+                .unwrap();
 
         let mut i2s_dma_transfer = Transfer::init_memory_to_peripheral(
-            dma1ch5,
+            dma1ch4,
             i2s,
             i2s_buf1,
             Some(i2s_buf2),
@@ -512,45 +587,38 @@ fn main() -> ! {
         }
     }
 
-    let ep_memory = cortex_m::singleton!(: [u32; 1024] = [0; 1024]).unwrap();
-    let usb = USB::new(
-        (dp.OTG_FS_GLOBAL, dp.OTG_FS_DEVICE, dp.OTG_FS_PWRCLK),
-        (gpioa.pa11, gpioa.pa12),
-        &clocks,
-    );
-    let usb_bus = UsbBus::new(usb, ep_memory);
-    let mut midi = MidiClass::new(&usb_bus, 1, 1).unwrap();
-    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x5e4))
-        .device_class(0)
-        // .device_sub_class(0)
-        .self_powered(true)
-        .strings(&[StringDescriptors::default()
-            .manufacturer("hazer-hazer")
-            .product("PAW1")
-            .serial_number("TEST")])
-        .unwrap()
-        .build();
+    {
+        static mut USB_BUS: Option<UsbBusAllocator<UsbBusType>> = None;
+
+        let ep_memory = cortex_m::singleton!(: [u32; 1024] = [0; 1024]).unwrap();
+        let usb = USB::new(
+            (dp.OTG_FS_GLOBAL, dp.OTG_FS_DEVICE, dp.OTG_FS_PWRCLK),
+            (gpioa.pa11, gpioa.pa12),
+            &clocks,
+        );
+        let usb_bus = UsbBus::new(usb, ep_memory);
+
+        unsafe {
+            USB_BUS.replace(usb_bus);
+        }
+
+        cortex_m::interrupt::free(|cs| {
+            USB_MIDI
+                .borrow(cs)
+                .borrow_mut()
+                .replace(UsbMidi::new(unsafe { USB_BUS.as_ref().unwrap() }));
+        });
+
+        unsafe {
+            NVIC::unmask(interrupt::OTG_FS);
+        }
+    }
 
     let mut ui = {
-        let root = col![select_keyed(
-            Frequency::each()
-                .map(|freq| (freq.value(), format!("{}Hz", freq.value())))
-                .collect::<Vec<_>>()
-        )
-        .on_change(|new| {
-            cortex_m::interrupt::free(|cs| {
-                SYNTH
-                    .borrow(cs)
-                    .borrow_mut()
-                    .as_mut()
-                    .unwrap()
-                    .set_freq(*new);
-            });
+        let root = col!["Paw1"];
 
-            Message::None
-        })];
-
-        let mut ui = UI::new(root, display.bounding_box().size.into()).monochrome();
+        let mut ui =
+            UI::<Message, _, _, _>::new(root, display.bounding_box().size.into()).monochrome();
 
         ui.auto_focus();
 
@@ -576,53 +644,12 @@ fn main() -> ! {
 
     let mut fps = FPS::new();
 
+    let mut last_keys_state = Keys::empty();
+
     info!("Starting main loop...");
     loop {
         let now_us = micros();
         let now_ms = millis();
-
-        if usb_dev.poll(&mut [&mut midi]) {
-            let mut buffer = [0; 64];
-
-            if let Ok(size) = midi.read(&mut buffer) {
-                let buffer_reader = MidiPacketBufferReader::new(&buffer, size);
-                for packet in buffer_reader.into_iter() {
-                    if let Ok(packet) = packet {
-                        match packet.message {
-                            usbd_midi::data::midi::message::Message::NoteOff(_, note, _) => {
-                                cortex_m::interrupt::free(|cs| {
-                                    SYNTH
-                                        .borrow(cs)
-                                        .borrow_mut()
-                                        .as_mut()
-                                        .unwrap()
-                                        .set_freq(note.freq())
-                                });
-                            }
-                            usbd_midi::data::midi::message::Message::NoteOn(_, note, _) => {
-                                // cortex_m::interrupt::free(|cs| {
-                                //     SYNTH
-                                //         .borrow(cs)
-                                //         .borrow_mut()
-                                //         .as_mut()
-                                //         .unwrap()
-                                //         .set_freq(0.0)
-                                // });
-                            }
-                            // usbd_midi::data::midi::message::Message::PolyphonicAftertouch(_, _, _) => todo!(),
-                            // usbd_midi::data::midi::message::Message::ProgramChange(_, _) => todo!(),
-                            // usbd_midi::data::midi::message::Message::ChannelAftertouch(_, _) => todo!(),
-                            // usbd_midi::data::midi::message::Message::PitchWheelChange(_, _, _) => todo!(),
-                            // usbd_midi::data::midi::message::Message::ControlChange(_, _, _) => todo!(),
-                            _ => info!(
-                                "Unsupported message: {}",
-                                format!("{:?}", packet.message).as_str()
-                            ),
-                        }
-                    }
-                }
-            }
-        }
 
         if now_us - last_controls_update_us > CONTROLS_UPDATE_PERIOD_US {
             if let ControlsState::Changed(changed) = control_panel.tick(now_ms) {
@@ -630,6 +657,19 @@ fn main() -> ! {
                 ui.tick(changed.into_events().into_iter());
             }
             last_controls_update_us = now_us;
+
+            let touched = Keys::from_bits(keys.get_touched().unwrap());
+            if let Some(touched) = touched {
+                if !touched.difference(last_keys_state).is_empty() {
+                    info!(
+                        "Key pressed: {}",
+                        format!("{:?}", touched.into_midi(last_keys_state)).as_str()
+                    );
+
+                    last_keys_state = touched;
+                }
+            }
+
         }
 
         if now_ms - last_frame_ms > FPS_MS_PERIOD {
@@ -667,73 +707,5 @@ fn main() -> ! {
 
             last_frame_ms = now_ms;
         }
-
-        // if main_timer
-        //     .now()
-        //     .checked_duration_since(last_frame_ms)
-        //     .unwrap()
-        //     .to_millis()
-        //     > 1_000
-        // {
-        //     info!("Second");
-        //     last_frame_ms = main_timer.now();
-        // }
-
-        // if main_timer.now().duration_since_epoch(). {
-        //     ui.draw(&mut display);
-        //     display.flush().unwrap();
-        // }
-
-        // let now_micros = timer.now().duration_since_epoch().to_micros();
-
-        // info!("NOW {}us", now);
-
-        // SOUND_CHANNEL.send(buf).await;
-
-        // match control_panel.tick(timer.now().duration_since_epoch().to_millis() as u64) {
-        //     ControlsState::None => {}
-        //     ControlsState::Changed(changed) => {
-        //         info!("State changed to {}", changed);
-        //     }
-        // }
-
-        // // ui.tick(core::iter::once(EventStub));
-
-        // if !buffer.is_full() {
-        //     let sample = (sound.next_sample() * 0.4 * i32::MAX as f32) as i32;
-        //     buffer.push_back((sample, sample)).ok();
-        // } else {
-        //     // info!("Buffer is full!");
-        //     // asm::nop();
-        // }
-
-        // for _ in 0..2 {
-        //     let frame = sending_frame.or_else(|| buffer.pop_front());
-
-        //     if let Some(frame) = frame {
-        //         match i2s.write(frame) {
-        //             Ok(()) => {
-        //                 sending_frame = None;
-        //             }
-        //             Err(err) => match err {
-        //                 nb::Error::Other(e) => defmt::unreachable!(),
-        //                 nb::Error::WouldBlock => {
-        //                     sending_frame = Some(frame);
-        //                 }
-        //             },
-        //         }
-        //         // let dur = dwt.measure(|| {
-        //         // block!(i2s.write(frame)).unwrap();
-        //         // });
-        //         // info!("Sent sample {} ticks", dur.as_ticks());
-        //     }
-        // }
-
-        // // 25FPS
-        // if sending_frame.is_none() && now_micros - last_frame_us > 1_000_000 {
-        //     // info!("Update display; now={}", now);
-
-        //     last_frame_us = now_micros;
-        // }
     }
 }

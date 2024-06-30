@@ -51,6 +51,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
+name = "bitflags"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf4b9d6a944f767f8e5e0db018570623c85f3d925ac718db4e06d0187adb21c1"
+
+[[package]]
 name = "byte-slice-cast"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -131,7 +137,7 @@ version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a99dd22262668b887121d4672af5a64b238f026099f1a2a1b322066c9ecfe9e0"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
  "defmt-macros",
 ]
 
@@ -601,6 +607,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mpr121-hal"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89e4698e00f1dd3ec99d3fec2c23c7173038a68cd9afb4b918e83cb4eb2cf71f"
+dependencies = [
+ "embedded-hal 0.2.7",
+]
+
+[[package]]
 name = "nb"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -743,6 +758,7 @@ dependencies = [
 name = "paw-one"
 version = "0.1.0"
 dependencies = [
+ "bitflags 2.5.0",
  "byte-slice-cast 1.2.2",
  "cortex-m",
  "cortex-m-rt",
@@ -766,6 +782,7 @@ dependencies = [
  "heapless 0.8.0",
  "micromath",
  "mipidsi",
+ "mpr121-hal",
  "nb 1.1.0",
  "num",
  "panic-halt",
@@ -1126,6 +1143,6 @@ version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ce302bf815ae84f5de90a61df0f9c2698069cb13e73342717a1c9e14a73dc94"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
  "embedded-hal 0.2.7",
 ]

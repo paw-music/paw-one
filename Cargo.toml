@@ -112,6 +112,8 @@ panic-halt = "0.2.0"
 debouncr = "0.2.2"
 usbd-midi = "0.3.0"
 usb-device = "0.3.2"
+mpr121-hal = "0.3.0"
+bitflags = "2.5.0"
 
 [dependencies.stm32f4xx-hal]
 version = "0.21.0"
