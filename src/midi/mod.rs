@@ -1,3 +1,5 @@
+pub mod note;
+
 use defmt::{debug, warn};
 use stm32f4xx_hal::otg_fs::{UsbBus, UsbBusType, USB};
 use usb_device::{

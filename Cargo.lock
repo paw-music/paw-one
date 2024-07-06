@@ -785,6 +785,7 @@ dependencies = [
  "mpr121-hal",
  "nb 1.1.0",
  "num",
+ "num_enum",
  "panic-halt",
  "panic-probe",
  "paw",

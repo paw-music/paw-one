@@ -31,15 +31,15 @@ use micromath::F32Ext;
 use paw_one::{
     control::{
         btn::{Btn, PullUp},
-        keys::Keys,
         qei_enc::QeiEnc,
         ControlPanel, ControlsState,
     },
     display_dma::{DisplayI2cDma, DISPLAY_I2C},
-    drivers::ttp229::TTP229,
+    drivers::ttp229::{Keys, TTP229},
     heap::init_global_heap,
+    iter::digits::Digits,
     micros,
-    midi::UsbMidi,
+    midi::{note::Note, UsbMidi},
     millis,
     synth::Synth,
     ui::{fps::FPS, logo::LOGO, Message},
@@ -79,7 +79,6 @@ use usb_device::{
 };
 use usbd_midi::{
     data::{
-        midi::notes::Note,
         usb::constants::{USB_AUDIO_CLASS, USB_MIDISTREAMING_SUBCLASS},
         usb_midi::midi_packet_reader::MidiPacketBufferReader,
     },
@@ -203,11 +202,6 @@ fn I2C1_ER() {
     });
 }
 
-// #[interrupt]
-// fn DMA1_STREAM5() {
-//     info!("DMA1_STREAM5");
-// }
-
 #[interrupt]
 fn TIM12() {
     cortex_m::interrupt::free(|cs| {
@@ -243,8 +237,9 @@ fn TIM12() {
 // }
 
 #[interrupt]
-fn DMA1_STREAM5() {
+fn DMA1_STREAM4() {
     static mut TRANSFER: Option<I2sDmaTransfer> = None;
+
     let transfer = TRANSFER.get_or_insert_with(|| {
         cortex_m::interrupt::free(|cs| I2S_DMA_TRANSFER.borrow(cs).replace(None).unwrap())
     });
@@ -283,6 +278,7 @@ fn DMA1_STREAM5() {
                             AUDIO_BUFFER_UNDERRUN_COUNT
                                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                         }
+
                         (buffer, ())
                     })
                     .unwrap();
@@ -318,7 +314,7 @@ fn OTG_FS() {
                                 .borrow_mut()
                                 .as_mut()
                                 .unwrap()
-                                .note_on(note)
+                                .note_on(note.into())
                         });
                     }
                     usbd_midi::data::midi::message::Message::NoteOn(_, note, _) => {
@@ -328,7 +324,7 @@ fn OTG_FS() {
                                 .borrow_mut()
                                 .as_mut()
                                 .unwrap()
-                                .note_off(note)
+                                .note_off(note.into())
                         });
                     }
                     // usbd_midi::data::midi::message::Message::PolyphonicAftertouch(_, _, _) => todo!(),
@@ -437,63 +433,20 @@ fn main() -> ! {
         display
     };
 
-    // let mut keys = {
-    //     let i2c = I2c::new(
-    //         dp.I2C2,
-    //         (
-    //             gpiob.pb10.into_alternate_open_drain(),
-    //             gpiob.pb3.into_alternate_open_drain(),
-    //         ),
-    //         i2c::Mode::Fast {
-    //             frequency: 400.kHz(),
-    //             duty_cycle: i2c::DutyCycle::Ratio2to1,
-    //         },
-    //         &clocks,
-    //     );
-    // };
-
-    let mut keys = {
-        // unsafe {
-        //     NVIC::unmask(interrupt::I2C2_ER);
-        // }
-
-        let i2c = I2c::new(
-            dp.I2C2,
-            (
-                gpiob.pb10.into_alternate_open_drain(),
-                gpiob.pb3.into_alternate_open_drain(),
-            ),
-            i2c::Mode::Fast {
-                frequency: 400.kHz(),
-                duty_cycle: i2c::DutyCycle::Ratio2to1,
-            },
-            &clocks,
-        );
-
-        let mut mpr121 =
-            mpr121_hal::Mpr121::new(i2c, mpr121_hal::Mpr121Address::Default, true, true)
-                .expect("MPR121 Initialization error");
-
-        // mpr121.set_thresholds(6, 6);
-
-        info!("MPR121 Keys initialized successfully");
-
-        mpr121
-    };
-
     let mut keys_ttp229 = {
         let ttp229 = TTP229::new((
             gpioc
                 .pc10
                 .into_push_pull_output()
                 .speed(stm32f4xx_hal::gpio::Speed::High),
-            gpioc.pc11.into_input(),
-        ));
+            gpioc.pc11.into_pull_up_input(),
+        ))
+        .freq(50_000);
 
         ttp229
     };
 
-    let synth = Synth::new();
+    let mut synth = Synth::new();
 
     cortex_m::interrupt::free(|cs| {
         SYNTH.borrow(cs).borrow_mut().replace(synth);
@@ -572,8 +525,8 @@ fn main() -> ! {
                 // .fifo_error_interrupt(true)
                 // .half_transfer_interrupt(true)
                 // .transfer_error_interrupt(true)
-                .memory_increment(true)
-                .priority(stm32f4xx_hal::dma::config::Priority::VeryHigh),
+                .priority(stm32f4xx_hal::dma::config::Priority::VeryHigh)
+                .memory_increment(true),
         );
 
         i2s_dma_transfer.start(|i2s| i2s.enable());
@@ -583,7 +536,7 @@ fn main() -> ! {
         });
 
         unsafe {
-            NVIC::unmask(interrupt::DMA1_STREAM5);
+            NVIC::unmask(interrupt::DMA1_STREAM4);
         }
     }
 
@@ -644,9 +597,33 @@ fn main() -> ! {
 
     let mut fps = FPS::new();
 
-    let mut last_keys_state = Keys::empty();
+    // let mut last_keys_state = Keys::empty();
+
+    let mut delay = dp.TIM10.delay_us(&clocks);
+    let mut main_delay = cp.SYST.delay(&clocks);
+
+    // cortex_m::interrupt::free(|cs| {
+    //     SYNTH
+    //         .borrow(cs)
+    //         .borrow_mut()
+    //         .as_mut()
+    //         .unwrap()
+    //         .note_on(Note::A4)
+    // });
+
+    // main_delay.delay_ms(10_000);
+
+    // cortex_m::interrupt::free(|cs| {
+    //     SYNTH
+    //         .borrow(cs)
+    //         .borrow_mut()
+    //         .as_mut()
+    //         .unwrap()
+    //         .note_off(Note::A4)
+    // });
 
     info!("Starting main loop...");
+
     loop {
         let now_us = micros();
         let now_ms = millis();
@@ -658,22 +635,92 @@ fn main() -> ! {
             }
             last_controls_update_us = now_us;
 
-            let touched = Keys::from_bits(keys.get_touched().unwrap());
-            if let Some(touched) = touched {
-                if !touched.difference(last_keys_state).is_empty() {
-                    info!(
-                        "Key pressed: {}",
-                        format!("{:?}", touched.into_midi(last_keys_state)).as_str()
-                    );
+            let touched = keys_ttp229.edges(&mut delay);
+            if touched != last_keys_state {
+                debug!(
+                    "Touched {}",
+                    last_keys_state
+                        .edges(touched, 2)
+                        .enumerate()
+                        .map(|(index, edge)| format!("{index}={:?}", edge))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                        .as_str()
+                );
 
-                    last_keys_state = touched;
-                }
+                last_keys_state
+                    .edges(touched, 2)
+                    .enumerate()
+                    .filter_map(|(d, e)| e.map(|e| (d, e)))
+                    .for_each(|(key_index, edge)| {
+                        let note: Note = (key_index as u8).try_into().unwrap();
+                        let note = note.transpose(60);
+                        info!("Note {} {}", note, edge);
+                        match edge {
+                            paw_one::iter::digits::Edge::Rising => {
+                                cortex_m::interrupt::free(|cs| {
+                                    SYNTH
+                                        .borrow(cs)
+                                        .borrow_mut()
+                                        .as_mut()
+                                        .unwrap()
+                                        .note_on(note)
+                                })
+                            }
+                            paw_one::iter::digits::Edge::Falling => {
+                                cortex_m::interrupt::free(|cs| {
+                                    SYNTH
+                                        .borrow(cs)
+                                        .borrow_mut()
+                                        .as_mut()
+                                        .unwrap()
+                                        .note_off(note)
+                                })
+                            }
+                        }
+                    });
+                // info!(
+                //     "Touched: {}",
+                //     last_keys_state
+                //         .edges(touched, 2)
+                //         .filter_map(|edge| if edge.is_none() {
+                //             None
+                //         } else {
+                //             Some(format!("{:?}, ", edge))
+                //         })
+                //         .collect::<alloc::string::String>()
+                //         .as_str()
+                // );
+                // last_keys_state = touched;
             }
-
         }
 
         if now_ms - last_frame_ms > FPS_MS_PERIOD {
             ui.draw(&mut display);
+
+            let now_playing = cortex_m::interrupt::free(|cs| {
+                SYNTH
+                    .borrow(cs)
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .active_voices()
+                    .filter_map(|voice| voice.current_note().map(|note| note.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
+
+            TextBox::new(
+                &format!("Now playing: {}", now_playing),
+                Rectangle::new(Point::new(0, 55), Size::new(128, 7)),
+                MonoTextStyleBuilder::new()
+                    .font(&FONT_4X6)
+                    .text_color(BinaryColor::On)
+                    .background_color(BinaryColor::Off)
+                    .build(),
+            )
+            .draw(&mut display)
+            .unwrap();
 
             // Text::new(format!("{}FPS", ), Point::new(x, y), character_style)
             TextBox::new(

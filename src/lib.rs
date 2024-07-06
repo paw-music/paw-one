@@ -11,6 +11,7 @@ pub mod midi;
 pub mod synth;
 pub mod ui;
 pub mod drivers;
+pub mod iter;
 
 #[macro_use]
 extern crate alloc;

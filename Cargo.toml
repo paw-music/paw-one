@@ -114,6 +114,7 @@ usbd-midi = "0.3.0"
 usb-device = "0.3.2"
 mpr121-hal = "0.3.0"
 bitflags = "2.5.0"
+num_enum = { version = "0.7.2", default-features = false }
 
 [dependencies.stm32f4xx-hal]
 version = "0.21.0"

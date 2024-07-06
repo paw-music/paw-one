@@ -1,11 +1,9 @@
 pub mod wavetable;
 
-use defmt::debug;
-use micromath::F32Ext;
+use defmt::{debug, warn};
 use paw::audio::{osc::simple_form::SimpleFormSource, source::AudioSourceIter};
-use usbd_midi::data::midi::notes::Note;
 
-use crate::{AUDIO_BUFFER, SAMPLE_RATE};
+use crate::{midi::note::Note, AUDIO_BUFFER, SAMPLE_RATE};
 
 #[derive(Clone, Copy)]
 pub enum OscKind {
@@ -36,16 +34,6 @@ impl core::fmt::Display for OscName {
     }
 }
 
-trait NoteFrequency {
-    fn freq(&self) -> f32;
-}
-
-impl NoteFrequency for Note {
-    fn freq(&self) -> f32 {
-        440.0 * 2f32.powf((Into::<u8>::into(*self) as f32 - 69.0) / 12.0)
-    }
-}
-
 pub struct Osc {
     pub kind: OscKind,
     pub name: OscName,
@@ -66,9 +54,13 @@ impl Voice {
         self.note = None;
     }
 
+    pub fn current_note(&self) -> Option<Note> {
+        self.note
+    }
+
     pub fn next_sample(&mut self) -> Option<f32> {
         if let Some(_) = self.note {
-            Some(self.sound.next_sample() * 0.4)
+            Some(self.sound.next_sample() * 0.2)
         } else {
             None
         }
@@ -101,37 +93,53 @@ impl Synth {
     }
 
     pub fn note_on(&mut self, note: Note) {
-        debug!("Note on {}", format!("{:?}", note).as_str());
-        if let Some(free_voice) = self.voices.iter_mut().find(|voice| voice.note.is_none()) {
-            free_voice.note_on(note);
+        if let Some(free_voice) = self
+            .voices
+            .iter_mut()
+            .position(|voice| voice.note.is_none())
+        {
+            debug!(
+                "Note on {} [voice={}]",
+                format!("{:?}", note).as_str(),
+                free_voice
+            );
+            self.voices[free_voice].note_on(note);
+        } else {
+            debug!("No free voice to play [{}]", note);
         }
     }
 
     pub fn note_off(&mut self, note: Note) {
-        debug!("Note off {}", format!("{:?}", note).as_str());
         if let Some(note_voice) = self
             .voices
             .iter_mut()
-            .find(|voice| voice.note == Some(note))
+            .position(|voice| voice.note == Some(note))
         {
-            note_voice.note_off();
+            debug!(
+                "Note off {} [voice={}]",
+                format!("{:?}", note).as_str(),
+                note_voice
+            );
+            self.voices[note_voice].note_off();
+        } else {
+            warn!("No voice found with note [{}] to off", note);
         }
     }
 
     pub fn tick(&mut self) {
-        let voices_sample: f32 = self
-            .voices
-            .iter_mut()
-            .filter_map(|voice| voice.next_sample())
-            .sum();
-
         cortex_m::interrupt::free(|cs| {
             let mut buffer = AUDIO_BUFFER.borrow(cs).borrow_mut();
             if !buffer.is_full() {
+                let voices_sample: f32 = self
+                    .voices
+                    .iter_mut()
+                    .filter_map(|voice| voice.next_sample())
+                    .sum();
+
                 let sample = (voices_sample * i32::MAX as f32) as i32;
                 buffer.push_back((sample, sample)).ok();
             } else {
-                // info!("Buffer is full!");
+                // debug!("Buffer is full!");
             }
         });
         // if !self.queue.is_full() {
@@ -140,5 +148,9 @@ impl Synth {
         // } else {
         //     // info!("Buffer is full!");
         // }
+    }
+
+    pub fn active_voices(&self) -> impl Iterator<Item = &Voice> {
+        self.voices.iter().filter(|voice| voice.note.is_some())
     }
 }
