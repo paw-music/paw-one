@@ -1,4 +1,7 @@
-use debouncr::{debounce_2, Debouncer, Repeat2};
+use debouncr::{
+    debounce_2, debounce_stateful_2, debounce_stateful_3, Debouncer, DebouncerStateful, Repeat2,
+    Repeat3,
+};
 use defmt::{debug, unwrap};
 use embedded_hal::digital::v2::{InputPin, OutputPin};
 use embedded_hal_1::delay::DelayNs;
@@ -31,6 +34,14 @@ impl Keys {
             .enumerate()
             .filter_map(|(key_index, key)| (key == 1).then_some(key_index))
     }
+
+    pub fn get(&self, index: u16) -> Option<bool> {
+        if index > 15 {
+            None
+        } else {
+            Some(self.0 & (1 << index) == 1)
+        }
+    }
 }
 
 impl Digits for Keys {
@@ -45,7 +56,7 @@ pub struct TTP229<SCL: OutputPin, SDO: InputPin> {
     scl: SCL,
     sdo: SDO,
     delay_us: u32,
-    debouncers: [Debouncer<u8, Repeat2>; 16],
+    debouncers: [DebouncerStateful<u8, Repeat3>; 16],
 }
 
 impl<SCL: OutputPin, SDO: InputPin> TTP229<SCL, SDO>
@@ -58,7 +69,7 @@ where
             scl: pins.0,
             sdo: pins.1,
             delay_us: DEFAULT_DELAY_US,
-            debouncers: core::array::from_fn(|_| debounce_2(false)),
+            debouncers: core::array::from_fn(|_| debounce_stateful_3(false)),
         };
 
         init
@@ -97,22 +108,13 @@ where
         &mut self,
         delay: &mut Delay<TIM, FREQ>,
     ) -> [Option<Edge>; 16] {
-        unwrap!(self.scl.set_high());
-        delay.delay_us(self.delay_us);
-
+        let states = self.read(delay);
         let mut edges = [None; 16];
-
         for key_index in 0..16 {
-            unwrap!(self.scl.set_low());
-            delay.delay_us(self.delay_us);
             edges[key_index] = self.debouncers[key_index]
-                .update(unwrap!(self.sdo.is_low()))
+                .update(states.get(key_index as u16).unwrap())
                 .map(Into::into);
-            unwrap!(self.scl.set_high());
-            delay.delay_us(self.delay_us);
         }
-
-        delay.delay_us(self.delay_us);
 
         edges
     }

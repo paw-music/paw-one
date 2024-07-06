@@ -636,63 +636,45 @@ fn main() -> ! {
             last_controls_update_us = now_us;
 
             let touched = keys_ttp229.edges(&mut delay);
-            if touched != last_keys_state {
-                debug!(
-                    "Touched {}",
-                    last_keys_state
-                        .edges(touched, 2)
-                        .enumerate()
-                        .map(|(index, edge)| format!("{index}={:?}", edge))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                        .as_str()
-                );
-
-                last_keys_state
-                    .edges(touched, 2)
-                    .enumerate()
-                    .filter_map(|(d, e)| e.map(|e| (d, e)))
-                    .for_each(|(key_index, edge)| {
-                        let note: Note = (key_index as u8).try_into().unwrap();
-                        let note = note.transpose(60);
-                        info!("Note {} {}", note, edge);
-                        match edge {
-                            paw_one::iter::digits::Edge::Rising => {
-                                cortex_m::interrupt::free(|cs| {
-                                    SYNTH
-                                        .borrow(cs)
-                                        .borrow_mut()
-                                        .as_mut()
-                                        .unwrap()
-                                        .note_on(note)
-                                })
-                            }
-                            paw_one::iter::digits::Edge::Falling => {
-                                cortex_m::interrupt::free(|cs| {
-                                    SYNTH
-                                        .borrow(cs)
-                                        .borrow_mut()
-                                        .as_mut()
-                                        .unwrap()
-                                        .note_off(note)
-                                })
-                            }
-                        }
-                    });
-                // info!(
-                //     "Touched: {}",
-                //     last_keys_state
-                //         .edges(touched, 2)
-                //         .filter_map(|edge| if edge.is_none() {
-                //             None
-                //         } else {
-                //             Some(format!("{:?}, ", edge))
-                //         })
-                //         .collect::<alloc::string::String>()
-                //         .as_str()
-                // );
-                // last_keys_state = touched;
-            }
+            touched
+                .iter()
+                .enumerate()
+                .filter_map(|(d, e)| e.map(|e| (d, e)))
+                .for_each(|(key_index, edge)| {
+                    let note: Note = (key_index as u8).try_into().unwrap();
+                    let note = note.transpose(60);
+                    match edge {
+                        paw_one::iter::digits::Edge::Rising => cortex_m::interrupt::free(|cs| {
+                            SYNTH
+                                .borrow(cs)
+                                .borrow_mut()
+                                .as_mut()
+                                .unwrap()
+                                .note_on(note)
+                        }),
+                        paw_one::iter::digits::Edge::Falling => cortex_m::interrupt::free(|cs| {
+                            SYNTH
+                                .borrow(cs)
+                                .borrow_mut()
+                                .as_mut()
+                                .unwrap()
+                                .note_off(note)
+                        }),
+                    }
+                });
+            // info!(
+            //     "Touched: {}",
+            //     last_keys_state
+            //         .edges(touched, 2)
+            //         .filter_map(|edge| if edge.is_none() {
+            //             None
+            //         } else {
+            //             Some(format!("{:?}, ", edge))
+            //         })
+            //         .collect::<alloc::string::String>()
+            //         .as_str()
+            // );
+            // last_keys_state = touched;
         }
 
         if now_ms - last_frame_ms > FPS_MS_PERIOD {
